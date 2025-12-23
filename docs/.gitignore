@@ -1,0 +1,7 @@
+# Do not include any intermediate files
+veriscript.*
+
+# But do keep the source
+!veriscript.tex
+# and the compiled pdf
+!veriscript.pdf
