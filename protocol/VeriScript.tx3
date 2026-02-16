@@ -1,0 +1,551 @@
+party Deployer;
+party Signer;
+
+policy ProtocolParameters      = 0xabcd; // TODO: fill in scripthash, import validator or from env?
+asset AdminToken               = 0xabcd."Admin";
+asset ProtocolParametersToken  = 0xabcd."ProtocolParameters";
+
+policy SignerTokenPolicy       = 0xabcd;
+policy SignerMetadataValidator = 0xabcd;
+policy SignatureTokenPolicy    = 0xabcd;
+policy AttestationValidator    = 0xabcd;
+
+// env {
+// }
+
+// d888888P
+//    88
+//    88    dP    dP 88d888b. .d8888b. .d8888b.
+//    88    88    88 88'  `88 88ooood8 Y8ooooo.
+//    88    88.  .88 88.  .88 88.  ...       88
+//    dP    `8888P88 88Y888P' `88888P' `88888P'
+//               .88 88
+//           d8888P  dP
+
+type ProtocolParametersDatum {
+  signer_token_policy:       Bytes,
+  signer_metadata_validator: Bytes,
+  signature_token_policy:    Bytes,
+  attestation_validator:     Bytes,
+}
+
+// Note: the validity of this data cannot be verified on-chain;
+//       users should be aware that this might be fake.
+type SignerMetadata {
+  nick_name:       Bytes, // mandatory
+  real_name:       Bytes, // optional
+  contact_info:    Bytes, // optional
+  additional_info: Bytes, // optional
+}
+
+type AttestationDatum {
+  original_author: Bytes, // signer_token_name, mandatory
+  description:     Bytes, // human readable description to help script identification
+  source_code:     Bytes, // url for the specific commit hash in version control, mandatory
+  script_hash:     Bytes, // mandatory
+  script_address:  Bytes, // if applicable
+  staking_policy:  Bytes, // if applicable
+  minting_policy:  Bytes, // if applicable
+}
+
+// TODO: revise indexers: are they needed?
+
+type ProtocolParametersMintRedeemer {
+  Mint { },
+  RetireProtocol { },
+}
+
+type ProtocolParametersSpendRedeemer {
+  Update { deployer_ix: Int, protocol_parameters_ix: Int, },
+  RetireScript { deployer_ix: Int, protocol_ix: Int, },
+  RetireProtocol { protocol_parameters_ix: Int, },
+}
+
+type SignerMetadataValidatorRedeemer {
+  Update { protocol_parameters_ix: Int, signer_input_ix: Int, signer_metadata_input_ix: Int, },
+}
+
+type SignatureTokenPolicyRedeemer {
+  MintSignatureToken { protocol_parameters_ix: Int, signer_input_ix_option: Int, },
+  Retire { },
+}
+
+type AttestationValidatorRedeemer {
+  Sign { protocol_parameters_ix: Int, signer_input_ix: Int, attestation_input_ix: Int, },
+  Retire { protocol_parameters_ix: Int, signer_input_ix: Int, attestation_input_ix: Int, },
+}
+
+// 888888ba                    dP                    888888ba                      dP                              dP  888888ba                                                   dP                              dP     dP   dP
+// 88    `8b                   88                    88    `8b                     88                              88  88    `8b                                                  88                              88     88   88
+// 88     88 .d8888b. 88d888b. 88 .d8888b. dP    dP a88aaaa8P' 88d888b. .d8888b. d8888P .d8888b. .d8888b. .d8888b. 88 a88aaaa8P' .d8888b. 88d888b. .d8888b. 88d8b.d8b. .d8888b. d8888P .d8888b. 88d888b. .d8888b. 88     88 d8888P dP.  .dP .d8888b.
+// 88     88 88ooood8 88'  `88 88 88'  `88 88    88  88        88'  `88 88'  `88   88   88'  `88 88'  `"" 88'  `88 88  88        88'  `88 88'  `88 88'  `88 88'`88'`88 88ooood8   88   88ooood8 88'  `88 Y8ooooo. 88     88   88    `8bd8'  88'  `88
+// 88    .8P 88.  ... 88.  .88 88 88.  .88 88.  .88  88        88       88.  .88   88   88.  .88 88.  ... 88.  .88 88  88        88.  .88 88       88.  .88 88  88  88 88.  ...   88   88.  ... 88             88 Y8.   .8P   88    .d88b.  88.  .88
+// 8888888P  `88888P' 88Y888P' dP `88888P' `8888P88  dP        dP       `88888P'   dP   `88888P' `88888P' `88888P' dP  dP        `88888P8 dP       `88888P8 dP  dP  dP `88888P'   dP   `88888P' dP       `88888P' `Y88888P'   dP   dP'  `dP `88888P'
+//                    88                        .88
+//                    dP                    d8888P
+
+tx deployProtocolParametersUtxo(anchor: UtxoRef) {
+
+  input fees_input {
+    from: Deployer,
+    ref: anchor,
+  }
+
+  mint {
+    amount: AdminToken(1) + ProtocolParametersToken(1),
+    redeemer: ProtocolParametersMintRedeemer::Mint { },
+  }
+
+  // TODO: obviously add script, not sure how tx3 handles it
+  // scripts {
+  //   ProtocolParametersScript
+  // }
+
+  output protocol_utxo {
+    to: ProtocolParameters,
+    datum: ProtocolParametersDatum {
+      signer_token_policy:       SignerTokenPolicy,
+      signer_metadata_validator: SignerMetadataValidator,
+      signature_token_policy:    SignatureTokenPolicy,
+      attestation_validator:     AttestationValidator,
+    },
+    amount: min_utxo(protocol_utxo) + ProtocolParametersToken(1),
+    // TODO: reference_script: ProtocolParametersScript,
+  }
+
+  output change {
+    to: Deployer,
+    amount: fees_input - fees - min_utxo(protocol_utxo) + AdminToken(1),
+  }
+
+}
+
+// dP     dP                dP            dP             888888ba                      dP                              dP  888888ba                                                   dP
+// 88     88                88            88             88    `8b                     88                              88  88    `8b                                                  88
+// 88     88 88d888b. .d888b88 .d8888b. d8888P .d8888b. a88aaaa8P' 88d888b. .d8888b. d8888P .d8888b. .d8888b. .d8888b. 88 a88aaaa8P' .d8888b. 88d888b. .d8888b. 88d8b.d8b. .d8888b. d8888P .d8888b. 88d888b. .d8888b.
+// 88     88 88'  `88 88'  `88 88'  `88   88   88ooood8  88        88'  `88 88'  `88   88   88'  `88 88'  `"" 88'  `88 88  88        88'  `88 88'  `88 88'  `88 88'`88'`88 88ooood8   88   88ooood8 88'  `88 Y8ooooo.
+// Y8.   .8P 88.  .88 88.  .88 88.  .88   88   88.  ...  88        88       88.  .88   88   88.  .88 88.  ... 88.  .88 88  88        88.  .88 88       88.  .88 88  88  88 88.  ...   88   88.  ... 88             88
+// `Y88888P' 88Y888P' `88888P8 `88888P8   dP   `88888P'  dP        dP       `88888P'   dP   `88888P' `88888P' `88888P' dP  dP        `88888P8 dP       `88888P8 dP  dP  dP `88888P'   dP   `88888P' dP       `88888P'
+//           88
+//           dP
+
+tx updateProtocolParameters(deployer_ix: Int, protocol_parameters_ix: Int) { // TODO: handle indexers
+
+  input deployer_input {
+    from: Deployer,
+    min_amount: fees + AdminToken(1),
+  }
+
+  input protocol_parameters_input { // This also contains ProtocolParameters as reference script.
+    from: ProtocolParameters,
+    min_amount: ProtocolParametersToken(1),
+    redeemer: ProtocolParametersSpendRedeemer::Update {
+      deployer_ix: deployer_ix,
+      protocol_parameters_ix: protocol_parameters_ix,
+    },
+  }
+
+  output protocol_utxo {
+    to: ProtocolParameters,
+    datum: ProtocolParametersDatum {
+      signer_token_policy:       SignerTokenPolicy,
+      signer_metadata_validator: SignerMetadataValidator,
+      signature_token_policy:    SignatureTokenPolicy,
+      attestation_validator:     AttestationValidator,
+    },
+    amount: min_utxo(protocol_utxo) + ProtocolParametersToken(1),
+    // TODO: reference_script: ProtocolParametersScript,
+  }
+
+  output change {
+    to: Deployer,
+    amount: deployer_input - fees + AdminToken(1),
+  }
+
+}
+
+// 888888ba                    dP                    888888ba           .8888b                                                       .d88888b                    oo            dP
+// 88    `8b                   88                    88    `8b          88   "                                                       88.    "'                                 88
+// 88     88 .d8888b. 88d888b. 88 .d8888b. dP    dP a88aaaa8P' .d8888b. 88aaa  .d8888b. 88d888b. .d8888b. 88d888b. .d8888b. .d8888b. `Y88888b. .d8888b. 88d888b. dP 88d888b. d8888P .d8888b.
+// 88     88 88ooood8 88'  `88 88 88'  `88 88    88  88   `8b. 88ooood8 88     88ooood8 88'  `88 88ooood8 88'  `88 88'  `"" 88ooood8       `8b 88'  `"" 88'  `88 88 88'  `88   88   Y8ooooo.
+// 88    .8P 88.  ... 88.  .88 88 88.  .88 88.  .88  88     88 88.  ... 88     88.  ... 88       88.  ... 88    88 88.  ... 88.  ... d8'   .8P 88.  ... 88       88 88.  .88   88         88
+// 8888888P  `88888P' 88Y888P' dP `88888P' `8888P88  dP     dP `88888P' dP     `88888P' dP       `88888P' dP    dP `88888P' `88888P'  Y88888P  `88888P' dP       dP 88Y888P'   dP   `88888P'
+//                    88                        .88                                                                                                                 88
+//                    dP                    d8888P                                                                                                                  dP
+
+tx deployReferenceScripts(ref_script: Bytes) {
+
+  input fees_input {
+    from: Deployer,
+    min_amount: fees
+      + min_utxo(signer_token_policy_ref)
+      + min_utxo(signer_metadata_validator_ref)
+      + min_utxo(signature_token_policy_ref)
+      + min_utxo(attestation_validator_ref),
+  }
+
+  output signer_token_policy_ref {
+    to: ProtocolParameters,
+    // reference_scipt: ref_script,
+  }
+
+  output signer_metadata_validator_ref {
+    to: ProtocolParameters,
+    // reference_scipt: ref_script,
+  }
+
+  output signature_token_policy_ref {
+    to: ProtocolParameters,
+    // reference_scipt: ref_script,
+  }
+
+  output attestation_validator_ref {
+    to: ProtocolParameters,
+    // reference_scipt: ref_script,
+  }
+
+  output change {
+    to: Deployer,
+    amount: fees_input - fees
+      - min_utxo(signer_token_policy_ref)
+      - min_utxo(signer_metadata_validator_ref)
+      - min_utxo(signature_token_policy_ref)
+      - min_utxo(attestation_validator_ref),
+  }
+
+}
+
+//  888888ba             dP   oo                   .d88888b                    oo            dP
+//  88    `8b            88                        88.    "'                                 88
+// a88aaaa8P' .d8888b. d8888P dP 88d888b. .d8888b. `Y88888b. .d8888b. 88d888b. dP 88d888b. d8888P
+//  88   `8b. 88ooood8   88   88 88'  `88 88ooood8       `8b 88'  `"" 88'  `88 88 88'  `88   88
+//  88     88 88.  ...   88   88 88       88.  ... d8'   .8P 88.  ... 88       88 88.  .88   88
+//  dP     dP `88888P'   dP   dP dP       `88888P'  Y88888P  `88888P' dP       dP 88Y888P'   dP
+//                                                                                88
+//                                                                                dP
+
+// used to reclaim min Ada locked in reference scripts
+tx retireScript(deployer_ix: Int, protocol_utxo: UtxoRef, deployer_ix: Int, protocol_ix: Int) {
+
+  input deployer_input {
+    from: Deployer,
+    min_amount: fees + AdminToken(1),
+  }
+
+  input protocol_input {
+    from: ProtocolParameters,
+    ref: protocol_utxo,
+    redeemer: ProtocolParametersSpendRedeemer::RetireScript {
+      deployer_ix: deployer_ix,
+      protocol_ix: protocol_ix,
+    },
+  }
+
+  // TODO: obviously add script
+  // scripts {
+  //   ProtocolParametersScript
+  // }
+
+  output change {
+    to: Deployer,
+    amount: deployer_input - fees + AdminToken(1) + min_utxo(protocol_input),
+  }
+
+}
+
+//  888888ba             dP   oo                    888888ba                      dP                              dP
+//  88    `8b            88                         88    `8b                     88                              88
+// a88aaaa8P' .d8888b. d8888P dP 88d888b. .d8888b. a88aaaa8P' 88d888b. .d8888b. d8888P .d8888b. .d8888b. .d8888b. 88
+//  88   `8b. 88ooood8   88   88 88'  `88 88ooood8  88        88'  `88 88'  `88   88   88'  `88 88'  `"" 88'  `88 88
+//  88     88 88.  ...   88   88 88       88.  ...  88        88       88.  .88   88   88.  .88 88.  ... 88.  .88 88
+//  dP     dP `88888P'   dP   dP dP       `88888P'  dP        dP       `88888P'   dP   `88888P' `88888P' `88888P' dP
+
+// used to retire whole protocol and unlock the remaining min Ada
+tx retireProtocol(deployer_ix: Int, protocol_utxo: UtxoRef, protocol_parameters_ix: Int) {
+
+  input deployer_input {
+    from: Deployer,
+    min_amount: fees + AdminToken(1),
+  }
+
+  input protocol_parameters_input {
+    from: ProtocolParameters,
+    ref: protocol_utxo,
+    min_amount: ProtocolParametersToken(1),
+    redeemer: ProtocolParametersSpendRedeemer::RetireProtocol { protocol_parameters_ix: protocol_parameters_ix, },
+  }
+
+  burn {
+    amount: ProtocolParametersToken(1) + AdminToken(1),
+    redeemer: ProtocolParametersMintRedeemer::RetireProtocol { },
+  }
+
+  output change {
+    to: Deployer,
+    amount: deployer_input - fees + min_utxo(protocol_parameters_input),
+  }
+
+}
+
+// 8888ba.88ba  oo            dP   .d88888b  oo                                     d888888P          dP
+// 88  `8b  `8b               88   88.    "'                                           88             88
+// 88   88   88 dP 88d888b. d8888P `Y88888b. dP .d8888b. 88d888b. .d8888b. 88d888b.    88    .d8888b. 88  .dP  .d8888b. 88d888b.
+// 88   88   88 88 88'  `88   88         `8b 88 88'  `88 88'  `88 88ooood8 88'  `88    88    88'  `88 88888"   88ooood8 88'  `88
+// 88   88   88 88 88    88   88   d8'   .8P 88 88.  .88 88    88 88.  ... 88          88    88.  .88 88  `8b. 88.  ... 88    88
+// dP   dP   dP dP dP    dP   dP    Y88888P  dP `8888P88 dP    dP `88888P' dP          dP    `88888P' dP   `YP `88888P' dP    dP
+//                                                   .88
+//                                               d8888P
+
+tx mintSignerToken(anchor: UtxoRef, signer_metadata: SignerMetadata, protocol_parameters_ref: UtxoRef, signer_token_policy_ref: UtxoRef, protocol_parameters_ix: Int) {
+
+  locals {
+    signer_token_name:    anchor, // sha3_256(bytearray.push(out_ref.transaction_id, out_ref.output_index))
+    signer_tokens_minted: AnyAsset(SignerTokenPolicy, signer_token_name, 2),
+    signer_token:         AnyAsset(SignerTokenPolicy, signer_token_name, 1),
+  }
+
+  reference protocol_parameters_reference {
+    ref: protocol_parameters_ref,
+  }
+
+  reference signer_token_policy_reference {
+    ref: signer_token_policy_ref,
+  }
+
+  input signer_input {
+    ref: anchor,
+    min_amount: fees + min_utxo(signer_metadata_output),
+  }
+
+  mint {
+    amount: signer_tokens_minted,
+    redeemer: protocol_parameters_ix,
+  }
+
+  output signer_metadata_output {
+    to: SignerMetadataValidator,
+    amount: min_utxo(signer_metadata_output) + signer_token,
+    datum: signer_metadata,
+  }
+
+  output signer_output {
+    to: Signer,
+    amount: signer_input - fees - min_utxo(signer_metadata_output) + signer_token,
+  }
+
+}
+
+// dP     dP                dP            dP            .d88888b  oo                                     8888ba.88ba             dP                  dP            dP
+// 88     88                88            88            88.    "'                                        88  `8b  `8b            88                  88            88
+// 88     88 88d888b. .d888b88 .d8888b. d8888P .d8888b. `Y88888b. dP .d8888b. 88d888b. .d8888b. 88d888b. 88   88   88 .d8888b. d8888P .d8888b. .d888b88 .d8888b. d8888P .d8888b.
+// 88     88 88'  `88 88'  `88 88'  `88   88   88ooood8       `8b 88 88'  `88 88'  `88 88ooood8 88'  `88 88   88   88 88ooood8   88   88'  `88 88'  `88 88'  `88   88   88'  `88
+// Y8.   .8P 88.  .88 88.  .88 88.  .88   88   88.  ... d8'   .8P 88 88.  .88 88    88 88.  ... 88       88   88   88 88.  ...   88   88.  .88 88.  .88 88.  .88   88   88.  .88
+// `Y88888P' 88Y888P' `88888P8 `88888P8   dP   `88888P'  Y88888P  dP `8888P88 dP    dP `88888P' dP       dP   dP   dP `88888P'   dP   `88888P8 `88888P8 `88888P8   dP   `88888P8
+//           88                                                           .88
+//           dP                                                       d8888P
+
+tx updateSignerMetadata(signer_token_name: Bytes, signer_metadata: SignerMetadata, protocol_parameters_ref: UtxoRef, signer_metadata_validator_ref: UtxoRef, protocol_parameters_ix: Int, signer_input_ix: Int, signer_metadata_input_ix: Int) {
+
+  locals {
+    signer_token: AnyAsset(SignerTokenPolicy, signer_token_name, 1),
+  }
+
+  reference protocol_parameters_reference {
+    ref: protocol_parameters_ref,
+  }
+
+  reference signer_metadata_validator_reference {
+    ref: signer_metadata_validator_ref,
+  }
+
+  input signer_input {
+    min_amount: fees + signer_token,
+  }
+
+  input signer_metadata_input {
+    from: SignerMetadataValidator,
+    min_amount: signer_token,
+    redeemer: SignerMetadataValidatorRedeemer::Update {
+      protocol_parameters_ix: protocol_parameters_ix,
+      signer_input_ix: signer_input_ix,
+      signer_metadata_input_ix: signer_metadata_input_ix,
+    },
+  }
+
+  output signer_metadata_output {
+    to: SignerMetadataValidator,
+    amount: signer_metadata_input,
+  }
+
+  output signer_output {
+    to: Signer,
+    amount: signer_input - fees,
+  }
+
+}
+
+//  .d888888    dP     dP                       dP   .d88888b                    oo            dP
+// d8'    88    88     88                       88   88.    "'                                 88
+// 88aaaaa88a d8888P d8888P .d8888b. .d8888b. d8888P `Y88888b. .d8888b. 88d888b. dP 88d888b. d8888P
+// 88     88    88     88   88ooood8 Y8ooooo.   88         `8b 88'  `"" 88'  `88 88 88'  `88   88
+// 88     88    88     88   88.  ...       88   88   d8'   .8P 88.  ... 88       88 88.  .88   88
+// 88     88    dP     dP   `88888P' `88888P'   dP    Y88888P  `88888P' dP       dP 88Y888P'   dP
+//                                                                                  88
+//                                                                                  dP
+
+tx attestScript(signer_token_name: Bytes, attestation: AttestationDatum, protocol_parameters_ref: UtxoRef, signature_token_policy_ref: UtxoRef, protocol_parameters_ix: Int) {
+
+  locals {
+    signer_token:    AnyAsset(SignerTokenPolicy   , signer_token_name, 1),
+    signature_token: AnyAsset(SignatureTokenPolicy, signer_token_name, 1),
+  }
+
+  reference protocol_parameters_reference {
+    ref: protocol_parameters_ref,
+  }
+
+  reference signature_token_policy_reference {
+    ref: signature_token_policy_ref,
+  }
+
+  input signer_input {
+    min_amount: fees + signer_token,
+  }
+
+  mint {
+    amount: signature_token,
+    redeemer: SignatureTokenPolicyRedeemer::MintSignatureToken {
+      protocol_parameters_ix: protocol_parameters_ix,
+      signer_input_ix_option: -1,
+    },
+  }
+
+  output attestation_output {
+    to: AttestationValidator,
+    datum: attestation,
+    amount: min_utxo(attestation_output) + signature_token,
+  }
+
+  output signer_output {
+    to: Signer,
+    amount: signer_input - fees,
+  }
+
+}
+
+// .d88888b  oo                    .d888888    dP     dP                       dP              dP   oo
+// 88.    "'                      d8'    88    88     88                       88              88
+// `Y88888b. dP .d8888b. 88d888b. 88aaaaa88a d8888P d8888P .d8888b. .d8888b. d8888P .d8888b. d8888P dP .d8888b. 88d888b.
+//       `8b 88 88'  `88 88'  `88 88     88    88     88   88ooood8 Y8ooooo.   88   88'  `88   88   88 88'  `88 88'  `88
+// d8'   .8P 88 88.  .88 88    88 88     88    88     88   88.  ...       88   88   88.  .88   88   88 88.  .88 88    88
+//  Y88888P  dP `8888P88 dP    dP 88     88    dP     dP   `88888P' `88888P'   dP   `88888P8   dP   dP `88888P' dP    dP
+//                   .88
+//               d8888P
+
+tx signAttestation(signer_token_name: Bytes, attestation_ref: UtxoRef, protocol_parameters_ref: UtxoRef, signature_token_policy_ref: UtxoRef, attestation_validator_ref: UtxoRef, protocol_parameters_ix: Int, signer_input_ix: Int, attestation_input_ix: Int) {
+
+  locals {
+    signer_token:    AnyAsset(SignerTokenPolicy   , signer_token_name, 1),
+    signature_token: AnyAsset(SignatureTokenPolicy, signer_token_name, 1),
+  }
+
+  reference protocol_parameters_reference {
+    ref: protocol_parameters_ref,
+  }
+
+  reference signature_token_policy_reference {
+    ref: signature_token_policy_ref,
+  }
+
+  reference attestation_validator_reference {
+    ref: attestation_validator_ref,
+  }
+
+  input signer_input {
+    min_amount: fees + signer_token,
+  }
+
+  input attestation_input {
+    ref: attestation_ref,
+    from: AttestationValidator,
+    datum_is: AttestationDatum,
+    redeemer: AttestationValidatorRedeemer::Sign {
+      protocol_parameters_ix: protocol_parameters_ix,
+      signer_input_ix: signer_input_ix,
+      attestation_input_ix: attestation_input_ix,
+    },
+  }
+
+  mint {
+    amount: signature_token,
+    redeemer: SignatureTokenPolicyRedeemer::MintSignatureToken {
+      protocol_parameters_ix: protocol_parameters_ix,
+      signer_input_ix: signer_input_ix,
+    },
+  }
+
+  output attestation_output {
+    to: AttestationValidator,
+    datum: attestation_input,
+    amount: attestation_input + signature_token,
+  }
+
+  output signer_output {
+    to: Signer,
+    amount: signer_input - fees,
+  }
+
+}
+
+//  888888ba             dP   oo                    .d888888    dP     dP                       dP              dP   oo
+//  88    `8b            88                        d8'    88    88     88                       88              88
+// a88aaaa8P' .d8888b. d8888P dP 88d888b. .d8888b. 88aaaaa88a d8888P d8888P .d8888b. .d8888b. d8888P .d8888b. d8888P dP .d8888b. 88d888b.
+//  88   `8b. 88ooood8   88   88 88'  `88 88ooood8 88     88    88     88   88ooood8 Y8ooooo.   88   88'  `88   88   88 88'  `88 88'  `88
+//  88     88 88.  ...   88   88 88       88.  ... 88     88    88     88   88.  ...       88   88   88.  .88   88   88 88.  .88 88    88
+//  dP     dP `88888P'   dP   dP dP       `88888P' 88     88    dP     dP   `88888P' `88888P'   dP   `88888P8   dP   dP `88888P' dP    dP
+
+
+tx signAttestation(signer_token_name: Bytes, attestsion_ref: UtxoRef, protocol_parameters_ref: UtxoRef, signer_token_policy_ref: UtxoRef, attestation_validator_ref: UtxoRef, protocol_parameters_ix: Int, signer_input_ix: Int, attestation_input_ix: Int) {
+
+  locals {
+    signer_token: AnyAsset(SignerTokenPolicy, signer_token_name, 1),
+  }
+
+  reference protocol_parameters_reference {
+    ref: protocol_parameters_ref,
+  }
+
+  reference signer_token_policy_reference {
+    ref: signer_token_policy_ref,
+  }
+
+  reference attestation_validator_reference {
+    ref: attestation_validator_ref,
+  }
+
+  input signer_input {
+    min_amount: fees + signer_token,
+  }
+
+  input attestation_input {
+    ref: attestsion_ref,
+    from: AttestationValidator,
+    datum_is: AttestationDatum,
+    redeemer: AttestationValidatorRedeemer::Retire {
+      protocol_parameters_ix: protocol_parameters_ix,
+      signer_input_ix: signer_input_ix,
+      attestation_input_ix: attestation_input_ix,
+    },
+  }
+
+  burn {
+    amount: attestation_input - Ada(attestation_input),
+    redeemer: SignatureTokenPolicyRedeemer::Retire { },
+  }
+
+  output signer_output {
+    to: Signer,
+    amount: signer_input - fees,
+  }
+
+}

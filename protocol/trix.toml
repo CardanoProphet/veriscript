@@ -1,0 +1,12 @@
+[protocol]
+name = "VeriScript"
+scope = ""
+version = "0.0.1"
+description = "A protocol for script attestation on Cardano"
+main = "VeriScript.tx3"
+
+[ledger]
+family = "cardano"
+
+[[codegen]]
+plugin = "ts-client"

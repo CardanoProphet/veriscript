@@ -1,0 +1,38 @@
+name = "CardanoProphet/veriscript-contracts"
+version = "0.1.0"
+compiler = "v1.1.21"
+plutus = "v3"
+license = "MIT"
+description = "Aiken contracts for project 'VeriScript'"
+
+[repository]
+user = "CardanoProphet"
+project = "veriscript-contracts"
+platform = "github"
+
+[[dependencies]]
+name = "aiken-lang/stdlib"
+version = "v3.0.0"
+source = "github"
+
+# TODO: fill in anchor_ix and anchor_tx_id at deployment.
+
+[config.default]
+network = "mainnet"
+anchor_ix = 0
+[config.default.anchor_tx_id]
+bytes = "abcdef"
+encoding = "hex"
+[config.default.protocol_parameters_script_hash]
+bytes = "11c5063f334dc70aa10d19f453e324ceca2e738dff6736f3d2fb57ee"
+encoding = "hex"
+
+[config.preprod]
+network = "preprod"
+anchor_ix = 0
+[config.preprod.anchor_tx_id]
+bytes = "1234"
+encoding = "hex"
+[config.preprod.protocol_parameters_script_hash]
+bytes = "ff27b92edcf39051ccef52a2dff0ea17f90601561c47235e110c4adf"
+encoding = "hex"
