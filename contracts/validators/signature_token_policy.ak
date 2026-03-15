@@ -23,7 +23,7 @@ pub type SignatureTokenPolicyRedeemer {
 }
 
 /// Checks that the `attestation_datum` is correct.
-fn is_attestation_datum_correct(
+pub fn is_attestation_datum_correct(
   signer_token_name: ByteArray,
   attestation_datum: AttestationDatum,
 ) -> Bool {
@@ -159,3 +159,4 @@ validator signature_token_policy {
     fail @"unsupported purpose"
   }
 }
+

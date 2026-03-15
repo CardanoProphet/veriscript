@@ -32,7 +32,7 @@ pub type AttestationValidatorRedeemer {
 /// tokens as `input_value` with the additional
 /// `new_token_policy`.`new_token_name`. Additional Ada
 /// amounts are tolerated.
-fn is_new_signature_added(
+pub fn is_new_signature_added(
   input_value: Value,
   new_token_policy: PolicyId,
   new_token_name: AssetName,

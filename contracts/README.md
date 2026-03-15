@@ -22,12 +22,50 @@ make shell
 
 This drops you into a nix-shell with Aiken v1.1.21 available.
 
+## One-shot Build + Deploy
+
+From the repo root, use the deployment wrapper:
+
+```bash
+./deploy-protocol \
+  --deployer-seed "word1 word2 ..." \
+  --network preprod \
+  --blockfrost-api-key <key>
+```
+
+What it does:
+
+1. Selects an anchor UTxO from the deployer wallet
+2. Writes that anchor into `contracts/aiken.toml`
+3. Runs the `contracts/Makefile` build inside `nix shell`
+4. Deploys the four execution reference scripts
+5. Mints the protocol parameters + admin tokens into the protocol state UTxO, which also carries the `protocol_parameters` reference script
+6. Updates generated deployment data for frontend/backend automatically
+
+Optional flags:
+
+```bash
+--style verbose|silent   # default: verbose
+--build-only             # stop after build + generated config sync
+--skip-build             # reuse an already-built blueprint
+--resume-phase2          # reuse recorded phase-1 reference scripts and only submit phase 2
+--anchor-tx-hash <hash>  # override automatic anchor selection
+--anchor-tx-ix <ix>
+```
+
+The generated deployment state is stored in:
+
+- `deployments/protocol-deployment.json`
+- `frontend/src/generated/protocolDeployment.ts`
+- `backend/src/generated/protocolDeployment.ts`
+
 ## Main Commands
 
 ```bash
 make              # show this help
 make all          # build all four variants
 make check        # run aiken check (type checking + linting)
+make build-in-nix TARGET=preprod-verbose.json  # non-interactive nix-backed build
 
 # Individual builds
 make mainnet-silent.json
@@ -60,6 +98,8 @@ The Makefile:
 5. Cleans up temporary `plutus.json`
 
 This ensures the generated Plutus script always contains the correct protocol parameters hash for the target network.
+
+The root `./deploy-protocol` wrapper builds on top of this Makefile rather than duplicating the Aiken build logic.
 
 ## Development Workflow (recommended)
 

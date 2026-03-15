@@ -1,0 +1,18 @@
+{
+  "name": "veriscript-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "deploy": "tsx deploy-protocol.ts"
+  },
+  "dependencies": {
+    "@meshsdk/core": "^1.9.0-beta.101",
+    "bech32": "^2.0.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.15.6",
+    "typescript": "^5.5.0"
+  }
+}

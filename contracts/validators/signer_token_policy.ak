@@ -13,7 +13,7 @@ use types.{ProtocolParametersDatum, SignerMetadataDatum}
 
 /// Check that the signer metadata is correct. (Currently only
 /// the `nick_name` field is mandatory, all others are optional.)
-fn is_signer_metadatum_correct(datum: SignerMetadataDatum) -> Bool {
+pub fn is_signer_metadatum_correct(datum: SignerMetadataDatum) -> Bool {
   let SignerMetadataDatum { nick_name, .. } = datum
   !bytearray.is_empty(nick_name)
 }

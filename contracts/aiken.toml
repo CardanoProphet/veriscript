@@ -15,6 +15,11 @@ name = "aiken-lang/stdlib"
 version = "v3.0.0"
 source = "github"
 
+[[dependencies]]
+name = "aiken-lang/fuzz"
+version = "v2.1.1"
+source = "github"
+
 # TODO: fill in anchor_ix and anchor_tx_id at deployment.
 
 [config.default]
@@ -29,10 +34,10 @@ encoding = "hex"
 
 [config.preprod]
 network = "preprod"
-anchor_ix = 0
+anchor_ix = 1
 [config.preprod.anchor_tx_id]
-bytes = "1234"
+bytes = "30bcfe180c17c6a54430610c2c1fa68cb9aa01f025c82709eeb1b797845d3bbd"
 encoding = "hex"
 [config.preprod.protocol_parameters_script_hash]
-bytes = "ff27b92edcf39051ccef52a2dff0ea17f90601561c47235e110c4adf"
+bytes = "1e0aa2a0a1eb4973a8850569c469942904bc7f2109b66264368d8b83"
 encoding = "hex"

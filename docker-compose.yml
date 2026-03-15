@@ -1,0 +1,98 @@
+services:
+  traefik:
+    image: ${TRAEFIK_IMAGE}
+    container_name: traefik
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+
+      # entrypoints
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+
+      # ACME via Cloudflare DNS-01 - works behind orange cloud
+      - --certificatesresolvers.le.acme.email=${LETSENCRYPT_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.dnschallenge=true
+      - --certificatesresolvers.le.acme.dnschallenge.provider=cloudflare
+
+      # misc
+      - --api.dashboard=true
+      - --serversTransport.insecureSkipVerify=false
+    environment:
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - traefik_letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dynamic:/etc/traefik/dynamic # mount dynamic config dir
+    networks:
+      - traefik
+
+  web:
+    image: ${NGINX_IMAGE}
+    container_name: react-nginx
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: https://${APP_HOST}
+        VITE_BLOCKFROST_API_KEY: ${BLOCKFROST_API_KEY}
+        VITE_CARDANO_NETWORK: ${CARDANO_NETWORK:-preprod}
+        VITE_PROTOCOL_PARAMS_TX_HASH: ${VITE_PROTOCOL_PARAMS_TX_HASH:-}
+        VITE_PROTOCOL_PARAMS_TX_IX: ${VITE_PROTOCOL_PARAMS_TX_IX:-0}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.react.rule=Host(`${APP_HOST}`)
+      - traefik.http.routers.react.entrypoints=websecure
+      - traefik.http.routers.react.tls=true
+      - traefik.http.routers.react.tls.certresolver=le
+      - traefik.http.routers.react.tls.options=standard@file
+
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.sec-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.sec-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.sec-headers.headers.stsPreload=true
+      - traefik.http.middlewares.sec-headers.headers.browserXssFilter=true
+      - traefik.http.middlewares.sec-headers.headers.contentTypeNosniff=true
+      - traefik.http.routers.react.middlewares=gzip,sec-headers
+    networks:
+      - traefik
+    depends_on:
+      - traefik
+
+  veriscript-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: veriscript-backend
+    environment:
+      - PORT=${PORT:-3001}
+      - CARDANO_NETWORK=${CARDANO_NETWORK:-preprod}
+      - BLOCKFROST_API_KEY=${BLOCKFROST_API_KEY}
+    expose:
+      - "${PORT:-3001}"
+    labels:
+      - traefik.enable=true
+      # Route: https://<APP_HOST>/api/...
+      - traefik.http.routers.api.rule=Host(`${APP_HOST}`) && PathPrefix(`/api`)
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls=true
+      - traefik.http.routers.api.tls.certresolver=le
+      # Send to the container's internal port
+      - traefik.http.services.api.loadbalancer.server.port=${PORT:-3001}
+    networks: [traefik]
+    depends_on: [traefik]
+
+networks:
+  traefik:
+    name: traefik
+
+volumes:
+  traefik_letsencrypt:
+    name: traefik_letsencrypt
