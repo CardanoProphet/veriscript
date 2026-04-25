@@ -6,6 +6,7 @@ export interface AttestationDatum {
   script_address: string;
   staking_policy: string; // hex or empty
   minting_policy: string; // hex or empty
+  counter_attestation: boolean;
 }
 
 export interface SignerMetadataDatum {
@@ -43,6 +44,7 @@ export interface AttestationUtxo {
   datum: AttestationDatum;
   signers: SignatureToken[];
   signerCount: number;
+  counterSignerCount: number;
   lovelace: string;
   referenceScriptHash: string | null;
   constituents: AttestationConstituent[];

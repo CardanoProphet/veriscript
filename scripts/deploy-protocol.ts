@@ -41,9 +41,18 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const CONTRACTS_DIR = path.join(REPO_ROOT, "contracts");
 const AIKEN_TOML_PATH = path.join(CONTRACTS_DIR, "aiken.toml");
 const DEPLOYMENTS_DIR = path.join(REPO_ROOT, "deployments");
-const DEPLOYMENT_MANIFEST_PATH = path.join(DEPLOYMENTS_DIR, "protocol-deployment.json");
-const FRONTEND_GENERATED_PATH = path.join(REPO_ROOT, "frontend/src/generated/protocolDeployment.ts");
-const BACKEND_GENERATED_PATH = path.join(REPO_ROOT, "backend/src/generated/protocolDeployment.ts");
+const DEPLOYMENT_MANIFEST_PATH = path.join(
+  DEPLOYMENTS_DIR,
+  "protocol-deployment.json",
+);
+const FRONTEND_GENERATED_PATH = path.join(
+  REPO_ROOT,
+  "frontend/src/generated/protocolDeployment.ts",
+);
+const BACKEND_GENERATED_PATH = path.join(
+  REPO_ROOT,
+  "backend/src/generated/protocolDeployment.ts",
+);
 
 const REF_SCRIPT_SETTLE_MS = 10_000;
 const ANCHOR_FEE_BUFFER_LOVELACE = 5_000_000n;
@@ -161,10 +170,22 @@ const SCRIPT_SPECS: ReadonlyArray<{
   name: ScriptName;
   titleFragment: string;
 }> = [
-  { name: "attestation_validator", titleFragment: "attestation_validator.attestation_validator.spend" },
-  { name: "signature_token_policy", titleFragment: "signature_token_policy.signature_token_policy.mint" },
-  { name: "signer_metadata_validator", titleFragment: "signer_metadata_validator.signer_metadata_validator.spend" },
-  { name: "signer_token_policy", titleFragment: "signer_token_policy.signer_token_policy.mint" },
+  {
+    name: "attestation_validator",
+    titleFragment: "attestation_validator.attestation_validator.spend",
+  },
+  {
+    name: "signature_token_policy",
+    titleFragment: "signature_token_policy.signature_token_policy.mint",
+  },
+  {
+    name: "signer_metadata_validator",
+    titleFragment: "signer_metadata_validator.signer_metadata_validator.spend",
+  },
+  {
+    name: "signer_token_policy",
+    titleFragment: "signer_token_policy.signer_token_policy.mint",
+  },
 ];
 
 const PROTOCOL_PARAMETERS_SPEC = {
@@ -199,10 +220,14 @@ function parseStyle(value: string | undefined): BlueprintStyle {
   fail(`Invalid blueprint style: ${value}`);
 }
 
-function parseOptionalInteger(value: string | undefined, name: string): number | undefined {
+function parseOptionalInteger(
+  value: string | undefined,
+  name: string,
+): number | undefined {
   if (value === undefined) return undefined;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) fail(`Invalid ${name}: ${value}`);
+  if (!Number.isInteger(parsed) || parsed < 0)
+    fail(`Invalid ${name}: ${value}`);
   return parsed;
 }
 
@@ -239,7 +264,11 @@ function parseArgs(argv: string[]): CliOptions {
       printHelp();
       process.exit(0);
     }
-    if (token === "--skip-build" || token === "--build-only" || token === "--resume-phase2") {
+    if (
+      token === "--skip-build" ||
+      token === "--build-only" ||
+      token === "--resume-phase2"
+    ) {
       flags.add(token);
       continue;
     }
@@ -255,23 +284,26 @@ function parseArgs(argv: string[]): CliOptions {
     (process.env.VERBOSE === undefined
       ? undefined
       : process.env.VERBOSE === "false"
-      ? "silent"
-      : "verbose");
+        ? "silent"
+        : "verbose");
 
   return {
     blockfrostApiKey: requireValue(
       args.get("--blockfrost-api-key") ?? process.env.BLOCKFROST_API_KEY,
-      "blockfrost api key"
+      "blockfrost api key",
     ),
     deployerSeed: requireValue(
       args.get("--deployer-seed") ?? process.env.DEPLOYER_SEED,
-      "deployer seed"
+      "deployer seed",
     ),
     network: parseNetwork(args.get("--network") ?? process.env.CARDANO_NETWORK),
     style: parseStyle(args.get("--style") ?? styleFromEnv),
     blueprintPath: args.get("--blueprint-path") ?? process.env.BLUEPRINT_PATH,
     anchorTxHash: args.get("--anchor-tx-hash") ?? process.env.ANCHOR_TX_HASH,
-    anchorTxIx: parseOptionalInteger(args.get("--anchor-tx-ix") ?? process.env.ANCHOR_TX_IX, "anchor tx ix"),
+    anchorTxIx: parseOptionalInteger(
+      args.get("--anchor-tx-ix") ?? process.env.ANCHOR_TX_IX,
+      "anchor tx ix",
+    ),
     skipBuild: flags.has("--skip-build"),
     buildOnly: flags.has("--build-only"),
     resumePhase2: flags.has("--resume-phase2"),
@@ -286,12 +318,18 @@ function networkToAikenEnv(network: NetworkName): "default" | "preprod" {
   return network === "mainnet" ? "default" : "preprod";
 }
 
-function resolveBuildTarget(network: NetworkName, style: BlueprintStyle): string {
+function resolveBuildTarget(
+  network: NetworkName,
+  style: BlueprintStyle,
+): string {
   const prefix = network === "mainnet" ? "mainnet" : "preprod";
   return `${prefix}-${style}.json`;
 }
 
-function resolveDefaultBlueprintPath(network: NetworkName, style: BlueprintStyle): string {
+function resolveDefaultBlueprintPath(
+  network: NetworkName,
+  style: BlueprintStyle,
+): string {
   return path.join(CONTRACTS_DIR, resolveBuildTarget(network, style));
 }
 
@@ -299,7 +337,11 @@ function createProvider(apiKey: string): BlockfrostProvider {
   return new BlockfrostProvider(apiKey);
 }
 
-function createWallet(provider: BlockfrostProvider, seed: string, network: NetworkName): MeshWallet {
+function createWallet(
+  provider: BlockfrostProvider,
+  seed: string,
+  network: NetworkName,
+): MeshWallet {
   return new MeshWallet({
     networkId: networkId(network),
     fetcher: provider,
@@ -317,31 +359,46 @@ function createTxBuilder(provider: BlockfrostProvider): MeshTxBuilder {
 
 function createConfiguredTxBuilder(
   provider: BlockfrostProvider,
-  protocolParams: Pick<Protocol, "coinsPerUtxoSize" | "minFeeRefScriptCostPerByte" | "maxTxSize">
+  protocolParams: Pick<
+    Protocol,
+    "coinsPerUtxoSize" | "minFeeRefScriptCostPerByte" | "maxTxSize"
+  >,
 ): MeshTxBuilder {
   return createTxBuilder(provider).protocolParams(protocolParams);
 }
 
 function loadBlueprint(blueprintPath: string): Blueprint {
-  if (!fs.existsSync(blueprintPath)) fail(`Blueprint not found: ${blueprintPath}`);
+  if (!fs.existsSync(blueprintPath))
+    fail(`Blueprint not found: ${blueprintPath}`);
   return JSON.parse(fs.readFileSync(blueprintPath, "utf8")) as Blueprint;
 }
 
 function findValidator(blueprint: Blueprint, fragment: string): Validator {
-  const validator = blueprint.validators.find((entry) => entry.title.includes(fragment));
+  const validator = blueprint.validators.find((entry) =>
+    entry.title.includes(fragment),
+  );
   if (!validator) fail(`Validator not found for fragment: ${fragment}`);
   return validator;
 }
 
-function scriptHashToEnterpriseAddress(scriptHash: string, network: NetworkName): string {
+function scriptHashToEnterpriseAddress(
+  scriptHash: string,
+  network: NetworkName,
+): string {
   const header = network === "mainnet" ? 0x71 : 0x70;
-  const addressBytes = Buffer.concat([Buffer.from([header]), Buffer.from(scriptHash, "hex")]);
+  const addressBytes = Buffer.concat([
+    Buffer.from([header]),
+    Buffer.from(scriptHash, "hex"),
+  ]);
   const prefix = network === "mainnet" ? "addr" : "addr_test";
   return bech32.encode(prefix, bech32.toWords(addressBytes), 200);
 }
 
 function getAlwaysFalseAddress(network: NetworkName): string {
-  return scriptHashToEnterpriseAddress(resolveNativeScriptHash(ALWAYS_FALSE), network);
+  return scriptHashToEnterpriseAddress(
+    resolveNativeScriptHash(ALWAYS_FALSE),
+    network,
+  );
 }
 
 function encodeBlueprintScript(validator: Validator): string {
@@ -349,13 +406,16 @@ function encodeBlueprintScript(validator: Validator): string {
   const resolvedHash = resolveScriptHash(scriptCbor, "V3");
   if (resolvedHash !== validator.hash) {
     fail(
-      `Encoded script hash mismatch for ${validator.title}: expected ${validator.hash}, got ${resolvedHash}`
+      `Encoded script hash mismatch for ${validator.title}: expected ${validator.hash}, got ${resolvedHash}`,
     );
   }
   return scriptCbor;
 }
 
-function prepareBlueprint(network: NetworkName, blueprintPath: string): PreparedBlueprint {
+function prepareBlueprint(
+  network: NetworkName,
+  blueprintPath: string,
+): PreparedBlueprint {
   const blueprint = loadBlueprint(blueprintPath);
 
   const hashes = blankStringScriptRecord();
@@ -367,17 +427,31 @@ function prepareBlueprint(network: NetworkName, blueprintPath: string): Prepared
     cbors[spec.name] = encodeBlueprintScript(validator);
   }
 
-  const protocolParametersValidator = findValidator(blueprint, PROTOCOL_PARAMETERS_SPEC.titleFragment);
+  const protocolParametersValidator = findValidator(
+    blueprint,
+    PROTOCOL_PARAMETERS_SPEC.titleFragment,
+  );
   hashes.protocol_parameters = protocolParametersValidator.hash;
-  cbors.protocol_parameters = encodeBlueprintScript(protocolParametersValidator);
+  cbors.protocol_parameters = encodeBlueprintScript(
+    protocolParametersValidator,
+  );
 
   return {
     hashes,
     cbors,
     addresses: {
-      attestation_validator: scriptHashToEnterpriseAddress(hashes.attestation_validator, network),
-      protocol_parameters: scriptHashToEnterpriseAddress(hashes.protocol_parameters, network),
-      signer_metadata_validator: scriptHashToEnterpriseAddress(hashes.signer_metadata_validator, network),
+      attestation_validator: scriptHashToEnterpriseAddress(
+        hashes.attestation_validator,
+        network,
+      ),
+      protocol_parameters: scriptHashToEnterpriseAddress(
+        hashes.protocol_parameters,
+        network,
+      ),
+      signer_metadata_validator: scriptHashToEnterpriseAddress(
+        hashes.signer_metadata_validator,
+        network,
+      ),
     },
   };
 }
@@ -392,7 +466,10 @@ function blankStringScriptRecord(): Record<ScriptName, string> {
   };
 }
 
-function blankReferenceScriptRecord(): Record<ScriptName, ReferenceScriptDeployment> {
+function blankReferenceScriptRecord(): Record<
+  ScriptName,
+  ReferenceScriptDeployment
+> {
   return {
     attestation_validator: { txHash: "", txIx: 0, hash: "", cbor: "" },
     protocol_parameters: { txHash: "", txIx: 0, hash: "", cbor: "" },
@@ -413,19 +490,26 @@ function blankProtocolParametersDeployment(): ProtocolParametersDeployment {
 }
 
 function getLovelace(amount: Amount): bigint {
-  const lovelace = amount.find((asset) => asset.unit === "lovelace" || asset.unit === "");
+  const lovelace = amount.find(
+    (asset) => asset.unit === "lovelace" || asset.unit === "",
+  );
   return BigInt(lovelace?.quantity ?? "0");
 }
 
 function isPureLovelace(amount: Amount): boolean {
-  return amount.every((asset) => asset.unit === "lovelace" || asset.unit === "");
+  return amount.every(
+    (asset) => asset.unit === "lovelace" || asset.unit === "",
+  );
 }
 
 function isPureLovelaceUtxo(utxo: UTxO): boolean {
   return isPureLovelace(utxo.output.amount);
 }
 
-function sameOutRef(left: { txHash: string; txIx: number }, right: { txHash: string; txIx: number }): boolean {
+function sameOutRef(
+  left: { txHash: string; txIx: number },
+  right: { txHash: string; txIx: number },
+): boolean {
   return left.txHash === right.txHash && left.txIx === right.txIx;
 }
 
@@ -441,7 +525,8 @@ function utxoOutRef(utxo: UTxO): OutRef {
 }
 
 function chooseAnchorCandidate(utxos: UTxO[]): AnchorSelection {
-  if (utxos.length === 0) fail("No wallet UTxOs available for anchor selection");
+  if (utxos.length === 0)
+    fail("No wallet UTxOs available for anchor selection");
 
   const ranked = [...utxos]
     .map((utxo) => ({
@@ -451,10 +536,13 @@ function chooseAnchorCandidate(utxos: UTxO[]): AnchorSelection {
     }))
     .sort((left, right) => {
       const leftEnough = left.lovelace >= MIN_PREFERRED_ANCHOR_LOVELACE ? 1 : 0;
-      const rightEnough = right.lovelace >= MIN_PREFERRED_ANCHOR_LOVELACE ? 1 : 0;
+      const rightEnough =
+        right.lovelace >= MIN_PREFERRED_ANCHOR_LOVELACE ? 1 : 0;
       if (leftEnough !== rightEnough) return rightEnough - leftEnough;
-      if (left.pureLovelace !== right.pureLovelace) return left.pureLovelace ? -1 : 1;
-      if (leftEnough === 1 && rightEnough === 1) return left.lovelace < right.lovelace ? -1 : 1;
+      if (left.pureLovelace !== right.pureLovelace)
+        return left.pureLovelace ? -1 : 1;
+      if (leftEnough === 1 && rightEnough === 1)
+        return left.lovelace < right.lovelace ? -1 : 1;
       if (left.lovelace === right.lovelace) return 0;
       return left.lovelace > right.lovelace ? -1 : 1;
     });
@@ -474,18 +562,23 @@ async function resolveAnchorSelection(
   wallet: MeshWallet,
   provider: BlockfrostProvider,
   anchorTxHash: string | undefined,
-  anchorTxIx: number | undefined
+  anchorTxIx: number | undefined,
 ): Promise<AnchorSelection> {
   if (anchorTxHash !== undefined || anchorTxIx !== undefined) {
     if (!anchorTxHash || anchorTxIx === undefined) {
-      fail("Both --anchor-tx-hash and --anchor-tx-ix are required when overriding the anchor");
+      fail(
+        "Both --anchor-tx-hash and --anchor-tx-ix are required when overriding the anchor",
+      );
     }
 
     const utxos = await provider.fetchUTxOs(anchorTxHash);
     const anchorUtxo = utxos.find(
-      (utxo) => utxo.input.txHash === anchorTxHash && utxo.input.outputIndex === anchorTxIx
+      (utxo) =>
+        utxo.input.txHash === anchorTxHash &&
+        utxo.input.outputIndex === anchorTxIx,
     );
-    if (!anchorUtxo) fail(`Anchor UTxO not found: ${anchorTxHash}#${anchorTxIx}`);
+    if (!anchorUtxo)
+      fail(`Anchor UTxO not found: ${anchorTxHash}#${anchorTxIx}`);
 
     return {
       txHash: anchorUtxo.input.txHash,
@@ -522,7 +615,7 @@ function buildManifestState(
   style: BlueprintStyle,
   blueprintPath: string,
   anchor: { txHash: string; txIx: number },
-  prepared: PreparedBlueprint
+  prepared: PreparedBlueprint,
 ): NetworkDeploymentState {
   const referenceScripts = blankReferenceScriptRecord();
   for (const name of Object.keys(referenceScripts) as ScriptName[]) {
@@ -554,12 +647,19 @@ function buildManifestState(
   };
 }
 
-function readAnchorFromAikenToml(network: NetworkName): { txHash: string; txIx: number } {
+function readAnchorFromAikenToml(network: NetworkName): {
+  txHash: string;
+  txIx: number;
+} {
   const content = fs.readFileSync(AIKEN_TOML_PATH, "utf8");
   const section = networkToAikenEnv(network);
-  const ixMatch = content.match(new RegExp(`\\[config\\.${section}\\][\\s\\S]*?anchor_ix = (\\d+)`));
+  const ixMatch = content.match(
+    new RegExp(`\\[config\\.${section}\\][\\s\\S]*?anchor_ix = (\\d+)`),
+  );
   const txMatch = content.match(
-    new RegExp(`\\[config\\.${section}\\.anchor_tx_id\\]\\s*\\nbytes = "([^"]*)"`)
+    new RegExp(
+      `\\[config\\.${section}\\.anchor_tx_id\\]\\s*\\nbytes = "([^"]*)"`,
+    ),
   );
 
   return {
@@ -568,7 +668,9 @@ function readAnchorFromAikenToml(network: NetworkName): { txHash: string; txIx: 
   };
 }
 
-function createDefaultManifestState(network: NetworkName): NetworkDeploymentState {
+function createDefaultManifestState(
+  network: NetworkName,
+): NetworkDeploymentState {
   const style: BlueprintStyle = "verbose";
   const anchor = readAnchorFromAikenToml(network);
   const blueprintPath = resolveDefaultBlueprintPath(network, style);
@@ -592,7 +694,13 @@ function createDefaultManifestState(network: NetworkName): NetworkDeploymentStat
     };
   }
 
-  return buildManifestState(network, style, blueprintPath, anchor, prepareBlueprint(network, blueprintPath));
+  return buildManifestState(
+    network,
+    style,
+    blueprintPath,
+    anchor,
+    prepareBlueprint(network, blueprintPath),
+  );
 }
 
 function loadManifest(): DeploymentManifest {
@@ -603,14 +711,16 @@ function loadManifest(): DeploymentManifest {
     };
   }
 
-  return JSON.parse(fs.readFileSync(DEPLOYMENT_MANIFEST_PATH, "utf8")) as DeploymentManifest;
+  return JSON.parse(
+    fs.readFileSync(DEPLOYMENT_MANIFEST_PATH, "utf8"),
+  ) as DeploymentManifest;
 }
 
 function renderDeploymentModule(manifest: DeploymentManifest): string {
   return `// Generated by scripts/deploy-protocol.ts\nexport const DEPLOYMENTS = ${JSON.stringify(
     manifest,
     null,
-    2
+    2,
   )} as const;\n\nexport type DeploymentNetwork = keyof typeof DEPLOYMENTS;\nexport type DeploymentInfo = (typeof DEPLOYMENTS)[DeploymentNetwork];\n`;
 }
 
@@ -619,21 +729,33 @@ function syncDeploymentArtifacts(manifest: DeploymentManifest): void {
   fs.mkdirSync(path.dirname(FRONTEND_GENERATED_PATH), { recursive: true });
   fs.mkdirSync(path.dirname(BACKEND_GENERATED_PATH), { recursive: true });
 
-  fs.writeFileSync(DEPLOYMENT_MANIFEST_PATH, JSON.stringify(manifest, null, 2) + "\n");
+  fs.writeFileSync(
+    DEPLOYMENT_MANIFEST_PATH,
+    JSON.stringify(manifest, null, 2) + "\n",
+  );
   const moduleContent = renderDeploymentModule(manifest);
   fs.writeFileSync(FRONTEND_GENERATED_PATH, moduleContent);
   fs.writeFileSync(BACKEND_GENERATED_PATH, moduleContent);
 }
 
-function updateAnchorInAikenToml(network: NetworkName, anchor: { txHash: string; txIx: number }): void {
+function updateAnchorInAikenToml(
+  network: NetworkName,
+  anchor: { txHash: string; txIx: number },
+): void {
   const section = networkToAikenEnv(network);
   const original = fs.readFileSync(AIKEN_TOML_PATH, "utf8");
 
-  const ixPattern = new RegExp(`(\\[config\\.${section}\\][\\s\\S]*?anchor_ix = )(\\d+)`);
-  const txPattern = new RegExp(`(\\[config\\.${section}\\.anchor_tx_id\\]\\s*\\nbytes = ")([^"]*)(")`);
+  const ixPattern = new RegExp(
+    `(\\[config\\.${section}\\][\\s\\S]*?anchor_ix = )(\\d+)`,
+  );
+  const txPattern = new RegExp(
+    `(\\[config\\.${section}\\.anchor_tx_id\\]\\s*\\nbytes = ")([^"]*)(")`,
+  );
 
-  if (!ixPattern.test(original)) fail(`Could not locate anchor_ix for config.${section} in aiken.toml`);
-  if (!txPattern.test(original)) fail(`Could not locate anchor_tx_id for config.${section} in aiken.toml`);
+  if (!ixPattern.test(original))
+    fail(`Could not locate anchor_ix for config.${section} in aiken.toml`);
+  if (!txPattern.test(original))
+    fail(`Could not locate anchor_tx_id for config.${section} in aiken.toml`);
 
   const updated = original
     .replace(ixPattern, `$1${anchor.txIx}`)
@@ -642,7 +764,11 @@ function updateAnchorInAikenToml(network: NetworkName, anchor: { txHash: string;
   fs.writeFileSync(AIKEN_TOML_PATH, updated);
 }
 
-async function runCommand(command: string, args: string[], cwd: string): Promise<void> {
+async function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
@@ -656,21 +782,33 @@ async function runCommand(command: string, args: string[], cwd: string): Promise
         resolve();
         return;
       }
-      reject(new Error(`Command failed (${code}): ${command} ${args.join(" ")}`));
+      reject(
+        new Error(`Command failed (${code}): ${command} ${args.join(" ")}`),
+      );
     });
   });
 }
 
-async function buildContracts(network: NetworkName, style: BlueprintStyle): Promise<string> {
+async function buildContracts(
+  network: NetworkName,
+  style: BlueprintStyle,
+): Promise<string> {
   const target = resolveBuildTarget(network, style);
   console.log(`\n🔨 Building ${target} via contracts/Makefile…`);
   await runCommand("make", ["build-in-nix", `TARGET=${target}`], CONTRACTS_DIR);
   return resolveDefaultBlueprintPath(network, style);
 }
 
-function availableWithoutAnchor(utxos: UTxO[], anchor: AnchorSelection): UTxO[] {
+function availableWithoutAnchor(
+  utxos: UTxO[],
+  anchor: AnchorSelection,
+): UTxO[] {
   return utxos.filter(
-    (utxo) => !sameOutRef({ txHash: utxo.input.txHash, txIx: utxo.input.outputIndex }, anchor)
+    (utxo) =>
+      !sameOutRef(
+        { txHash: utxo.input.txHash, txIx: utxo.input.outputIndex },
+        anchor,
+      ),
   );
 }
 
@@ -681,11 +819,19 @@ async function listWalletAddresses(wallet: MeshWallet): Promise<string[]> {
     wallet.getUnusedAddresses().catch(() => []),
   ]);
 
-  return Array.from(new Set([changeAddress, ...usedAddresses, ...unusedAddresses].filter(Boolean)));
+  return Array.from(
+    new Set(
+      [changeAddress, ...usedAddresses, ...unusedAddresses].filter(Boolean),
+    ),
+  );
 }
 
-async function fetchWalletUtxos(wallet: MeshWallet, provider: BlockfrostProvider): Promise<UTxO[]> {
+async function fetchWalletUtxos(
+  wallet: MeshWallet,
+  provider: BlockfrostProvider,
+): Promise<UTxO[]> {
   const addresses = await listWalletAddresses(wallet);
+  console.log(addresses);
   const utxosByOutRef = new Map<string, UTxO>();
 
   for (const address of addresses) {
@@ -726,7 +872,10 @@ function extractSelectedInputs(builder: MeshTxBuilder): OutRef[] {
   }));
 }
 
-async function waitForTxInfo(provider: BlockfrostProvider, txHash: string): Promise<void> {
+async function waitForTxInfo(
+  provider: BlockfrostProvider,
+  txHash: string,
+): Promise<void> {
   const deadline = Date.now() + TX_CONFIRMATION_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
@@ -746,7 +895,7 @@ async function waitForWalletUtxoSettlement(
   provider: BlockfrostProvider,
   anchor: AnchorSelection,
   txHash: string,
-  consumedInputs: OutRef[]
+  consumedInputs: OutRef[],
 ): Promise<UTxO[]> {
   const deadline = Date.now() + TX_CONFIRMATION_TIMEOUT_MS;
   const walletAddresses = new Set(await listWalletAddresses(wallet));
@@ -758,7 +907,9 @@ async function waitForWalletUtxoSettlement(
     try {
       const outputs = await provider.fetchUTxOs(txHash);
       expectedWalletOutputKeys = new Set(
-        outputs.filter((utxo) => walletAddresses.has(utxo.output.address)).map((utxo) => outRefKey(utxoOutRef(utxo)))
+        outputs
+          .filter((utxo) => walletAddresses.has(utxo.output.address))
+          .map((utxo) => outRefKey(utxoOutRef(utxo))),
       );
     } catch {
       await sleep(TX_CONFIRMATION_POLL_MS);
@@ -767,9 +918,15 @@ async function waitForWalletUtxoSettlement(
 
     const walletUtxos = await fetchWalletUtxos(wallet, provider);
     const availableUtxos = availableWithoutAnchor(walletUtxos, anchor);
-    const walletUtxoKeys = new Set(availableUtxos.map((utxo) => outRefKey(utxoOutRef(utxo))));
-    const hasConsumedInput = [...consumedInputKeys].some((key) => walletUtxoKeys.has(key));
-    const missingExpectedWalletOutput = [...expectedWalletOutputKeys].some((key) => !walletUtxoKeys.has(key));
+    const walletUtxoKeys = new Set(
+      availableUtxos.map((utxo) => outRefKey(utxoOutRef(utxo))),
+    );
+    const hasConsumedInput = [...consumedInputKeys].some((key) =>
+      walletUtxoKeys.has(key),
+    );
+    const missingExpectedWalletOutput = [...expectedWalletOutputKeys].some(
+      (key) => !walletUtxoKeys.has(key),
+    );
 
     if (!hasConsumedInput && !missingExpectedWalletOutput) {
       return availableUtxos;
@@ -778,13 +935,15 @@ async function waitForWalletUtxoSettlement(
     await sleep(TX_CONFIRMATION_POLL_MS);
   }
 
-  fail(`Timed out waiting for wallet UTxO settlement after transaction: ${txHash}`);
+  fail(
+    `Timed out waiting for wallet UTxO settlement after transaction: ${txHash}`,
+  );
 }
 
 async function resolveCollateralSelection(
   wallet: MeshWallet,
   provider: BlockfrostProvider,
-  excluded: OutRef[]
+  excluded: OutRef[],
 ): Promise<UTxO> {
   const excludedKeys = new Set(excluded.map(outRefKey));
   const sortByLovelaceAsc = (left: UTxO, right: UTxO) => {
@@ -798,33 +957,42 @@ async function resolveCollateralSelection(
     [...utxos]
       .filter((utxo) => !excludedKeys.has(outRefKey(utxoOutRef(utxo))))
       .filter(isPureLovelaceUtxo)
-      .filter((utxo) => getLovelace(utxo.output.amount) >= MIN_COLLATERAL_LOVELACE)
+      .filter(
+        (utxo) => getLovelace(utxo.output.amount) >= MIN_COLLATERAL_LOVELACE,
+      )
       .sort(sortByLovelaceAsc)[0];
 
-  const walletCollateral = pickCollateral(await wallet.getCollateral().catch(() => []));
+  const walletCollateral = pickCollateral(
+    await wallet.getCollateral().catch(() => []),
+  );
   if (walletCollateral) {
     return walletCollateral;
   }
 
-  const fetchedCollateral = pickCollateral(await fetchWalletUtxos(wallet, provider));
+  const fetchedCollateral = pickCollateral(
+    await fetchWalletUtxos(wallet, provider),
+  );
   if (fetchedCollateral) {
     return fetchedCollateral;
   }
 
   fail(
     `No pure-lovelace collateral UTxO >= ${MIN_COLLATERAL_LOVELACE.toString()} lovelace ` +
-      "is available after excluding the anchor input."
+      "is available after excluding the anchor input.",
   );
 }
 
 async function buildReferenceScriptBatch(
   provider: BlockfrostProvider,
-  protocolParams: Pick<Protocol, "coinsPerUtxoSize" | "minFeeRefScriptCostPerByte" | "maxTxSize">,
+  protocolParams: Pick<
+    Protocol,
+    "coinsPerUtxoSize" | "minFeeRefScriptCostPerByte" | "maxTxSize"
+  >,
   changeAddress: string,
   alwaysFalseAddress: string,
   availableUtxos: UTxO[],
   prepared: PreparedBlueprint,
-  names: ScriptName[]
+  names: ScriptName[],
 ): Promise<ReferenceScriptBatch> {
   const builder = createConfiguredTxBuilder(provider, protocolParams);
 
@@ -836,7 +1004,9 @@ async function buildReferenceScriptBatch(
     });
 
     builder
-      .txOut(alwaysFalseAddress, [{ unit: "lovelace", quantity: minLovelace.toString() }])
+      .txOut(alwaysFalseAddress, [
+        { unit: "lovelace", quantity: minLovelace.toString() },
+      ])
       .txOutReferenceScript(prepared.cbors[name], "V3");
   }
 
@@ -849,7 +1019,7 @@ async function buildReferenceScriptBatch(
   if (size > protocolParams.maxTxSize) {
     fail(
       `Reference script batch ${names.join(", ")} serialized to ${size} bytes, ` +
-        `which exceeds max tx size ${protocolParams.maxTxSize}.`
+        `which exceeds max tx size ${protocolParams.maxTxSize}.`,
     );
   }
 
@@ -863,19 +1033,24 @@ async function buildReferenceScriptBatch(
 
 async function buildLargestReferenceScriptBatch(
   provider: BlockfrostProvider,
-  protocolParams: Pick<Protocol, "coinsPerUtxoSize" | "minFeeRefScriptCostPerByte" | "maxTxSize">,
+  protocolParams: Pick<
+    Protocol,
+    "coinsPerUtxoSize" | "minFeeRefScriptCostPerByte" | "maxTxSize"
+  >,
   changeAddress: string,
   alwaysFalseAddress: string,
   availableUtxos: UTxO[],
   prepared: PreparedBlueprint,
   remainingSpecs: ReadonlyArray<{
     name: ScriptName;
-  }>
+  }>,
 ): Promise<ReferenceScriptBatch> {
   let lastGoodBatch: ReferenceScriptBatch | null = null;
 
   for (let count = 1; count <= remainingSpecs.length; count += 1) {
-    const candidateNames = remainingSpecs.slice(0, count).map((spec) => spec.name);
+    const candidateNames = remainingSpecs
+      .slice(0, count)
+      .map((spec) => spec.name);
 
     try {
       const batch = await buildReferenceScriptBatch(
@@ -885,7 +1060,7 @@ async function buildLargestReferenceScriptBatch(
         alwaysFalseAddress,
         availableUtxos,
         prepared,
-        candidateNames
+        candidateNames,
       );
       lastGoodBatch = batch;
     } catch (error) {
@@ -908,18 +1083,23 @@ async function deployReferenceScripts(
   provider: BlockfrostProvider,
   network: NetworkName,
   anchor: AnchorSelection,
-  prepared: PreparedBlueprint
+  prepared: PreparedBlueprint,
 ): Promise<Record<ScriptName, ReferenceScriptDeployment>> {
   const changeAddress = await wallet.getChangeAddress();
   const alwaysFalseAddress = getAlwaysFalseAddress(network);
   const protocolParams = await provider.fetchProtocolParameters();
   const results = blankReferenceScriptRecord();
 
-  let availableUtxos = availableWithoutAnchor(await fetchWalletUtxos(wallet, provider), anchor);
+  let availableUtxos = availableWithoutAnchor(
+    await fetchWalletUtxos(wallet, provider),
+    anchor,
+  );
   const remainingSpecs = [...SCRIPT_SPECS];
 
   console.log(`\n📍 AlwaysFalse address: ${alwaysFalseAddress}`);
-  console.log(`   Wallet UTxOs available for phase 1: ${availableUtxos.length}`);
+  console.log(
+    `   Wallet UTxOs available for phase 1: ${availableUtxos.length}`,
+  );
   console.log(`\n📦 Deploying ${SCRIPT_SPECS.length} reference scripts…\n`);
 
   while (remainingSpecs.length > 0) {
@@ -930,10 +1110,11 @@ async function deployReferenceScripts(
       alwaysFalseAddress,
       availableUtxos,
       prepared,
-      remainingSpecs
+      remainingSpecs,
     );
 
-    const label = batch.names.length === 1 ? batch.names[0] : batch.names.join(", ");
+    const label =
+      batch.names.length === 1 ? batch.names[0] : batch.names.join(", ");
     process.stdout.write(`  ${label}: `);
 
     const signedTx = await wallet.signTx(batch.unsignedTx);
@@ -950,7 +1131,13 @@ async function deployReferenceScripts(
     });
 
     await waitForTxInfo(provider, txHash);
-    availableUtxos = await waitForWalletUtxoSettlement(wallet, provider, anchor, txHash, batch.selectedInputs);
+    availableUtxos = await waitForWalletUtxoSettlement(
+      wallet,
+      provider,
+      anchor,
+      txHash,
+      batch.selectedInputs,
+    );
     remainingSpecs.splice(0, batch.names.length);
   }
 
@@ -961,7 +1148,7 @@ async function deployProtocolParameters(
   wallet: MeshWallet,
   provider: BlockfrostProvider,
   anchor: AnchorSelection,
-  prepared: PreparedBlueprint
+  prepared: PreparedBlueprint,
 ): Promise<{ deployment: ProtocolParametersDeployment; minLovelace: bigint }> {
   const changeAddress = await wallet.getChangeAddress();
   const protocolParams = await provider.fetchProtocolParameters();
@@ -975,33 +1162,46 @@ async function deployProtocolParameters(
     address: prepared.addresses.protocol_parameters,
     amount: [
       { unit: "lovelace", quantity: "0" },
-      { unit: prepared.hashes.protocol_parameters + PROTOCOL_PARAMETERS_TOKEN_HEX, quantity: "1" },
+      {
+        unit:
+          prepared.hashes.protocol_parameters + PROTOCOL_PARAMETERS_TOKEN_HEX,
+        quantity: "1",
+      },
     ],
     datum: {
       type: "Inline",
       data: { type: "Mesh", content: datum },
     },
-    referenceScript: { code: prepared.cbors.protocol_parameters, version: "V3" },
+    referenceScript: {
+      code: prepared.cbors.protocol_parameters,
+      version: "V3",
+    },
   });
 
-  const minimumAnchorLovelace = protocolOutputMinLovelace + ANCHOR_FEE_BUFFER_LOVELACE;
+  const minimumAnchorLovelace =
+    protocolOutputMinLovelace + ANCHOR_FEE_BUFFER_LOVELACE;
   if (anchor.lovelace < minimumAnchorLovelace) {
     fail(
       `Selected anchor ${anchor.txHash}#${anchor.txIx} holds ${anchor.lovelace.toString()} lovelace, ` +
         `but phase 2 needs at least ${minimumAnchorLovelace.toString()} lovelace ` +
-        `(protocol output ${protocolOutputMinLovelace.toString()} + ${ANCHOR_FEE_BUFFER_LOVELACE.toString()} fee buffer).`
+        `(protocol output ${protocolOutputMinLovelace.toString()} + ${ANCHOR_FEE_BUFFER_LOVELACE.toString()} fee buffer).`,
     );
   }
 
-  console.log("\n📍 Protocol parameters address:", prepared.addresses.protocol_parameters);
+  console.log(
+    "\n📍 Protocol parameters address:",
+    prepared.addresses.protocol_parameters,
+  );
   console.log("   Policy ID:", prepared.hashes.protocol_parameters);
   console.log("   Anchor:", `${anchor.txHash}#${anchor.txIx}`);
   console.log(`   Anchor lovelace: ${anchor.lovelace.toString()}`);
   console.log(
     "   Collateral:",
-    `${collateral.input.txHash}#${collateral.input.outputIndex} (${getLovelace(collateral.output.amount).toString()} lovelace)`
+    `${collateral.input.txHash}#${collateral.input.outputIndex} (${getLovelace(collateral.output.amount).toString()} lovelace)`,
   );
-  console.log(`   Protocol output min lovelace: ${protocolOutputMinLovelace.toString()}`);
+  console.log(
+    `   Protocol output min lovelace: ${protocolOutputMinLovelace.toString()}`,
+  );
 
   const mintRedeemer = { alternative: 0, fields: [] };
 
@@ -1011,10 +1211,14 @@ async function deployProtocolParameters(
       collateral.input.txHash,
       collateral.input.outputIndex,
       collateral.output.amount,
-      collateral.output.address
+      collateral.output.address,
     )
     .mintPlutusScriptV3()
-    .mint("1", prepared.hashes.protocol_parameters, PROTOCOL_PARAMETERS_TOKEN_HEX)
+    .mint(
+      "1",
+      prepared.hashes.protocol_parameters,
+      PROTOCOL_PARAMETERS_TOKEN_HEX,
+    )
     .mintingScript(prepared.cbors.protocol_parameters)
     .mintRedeemerValue(mintRedeemer, "Mesh")
     .mintPlutusScriptV3()
@@ -1023,7 +1227,11 @@ async function deployProtocolParameters(
     .mintRedeemerValue(mintRedeemer, "Mesh")
     .txOut(prepared.addresses.protocol_parameters, [
       { unit: "lovelace", quantity: protocolOutputMinLovelace.toString() },
-      { unit: prepared.hashes.protocol_parameters + PROTOCOL_PARAMETERS_TOKEN_HEX, quantity: "1" },
+      {
+        unit:
+          prepared.hashes.protocol_parameters + PROTOCOL_PARAMETERS_TOKEN_HEX,
+        quantity: "1",
+      },
     ])
     .txOutInlineDatumValue(datum, "Mesh")
     .txOutReferenceScript(prepared.cbors.protocol_parameters, "V3")
@@ -1047,7 +1255,7 @@ async function deployProtocolParameters(
 
 function applyReferenceDeployments(
   state: NetworkDeploymentState,
-  results: Record<ScriptName, ReferenceScriptDeployment>
+  results: Record<ScriptName, ReferenceScriptDeployment>,
 ): void {
   state.updatedAt = new Date().toISOString();
   for (const name of Object.keys(results) as ScriptName[]) {
@@ -1057,7 +1265,7 @@ function applyReferenceDeployments(
 
 function applyProtocolDeployment(
   state: NetworkDeploymentState,
-  deployment: ProtocolParametersDeployment
+  deployment: ProtocolParametersDeployment,
 ): void {
   state.updatedAt = new Date().toISOString();
   state.protocolParameters = deployment;
@@ -1065,10 +1273,12 @@ function applyProtocolDeployment(
 
 function reuseRecordedReferenceDeployments(
   existingState: NetworkDeploymentState | undefined,
-  prepared: PreparedBlueprint
+  prepared: PreparedBlueprint,
 ): Record<ScriptName, ReferenceScriptDeployment> {
   if (!existingState) {
-    fail("--resume-phase2 requires an existing deployment manifest entry for this network");
+    fail(
+      "--resume-phase2 requires an existing deployment manifest entry for this network",
+    );
   }
 
   const results = blankReferenceScriptRecord();
@@ -1076,12 +1286,14 @@ function reuseRecordedReferenceDeployments(
   for (const spec of SCRIPT_SPECS) {
     const existing = existingState.referenceScripts[spec.name];
     if (!existing?.txHash) {
-      fail(`--resume-phase2 requires an existing phase-1 deployment for ${spec.name}`);
+      fail(
+        `--resume-phase2 requires an existing phase-1 deployment for ${spec.name}`,
+      );
     }
     if (existing.hash !== prepared.hashes[spec.name]) {
       fail(
         `--resume-phase2 hash mismatch for ${spec.name}: manifest has ${existing.hash}, ` +
-          `current build has ${prepared.hashes[spec.name]}`
+          `current build has ${prepared.hashes[spec.name]}`,
       );
     }
 
@@ -1095,7 +1307,7 @@ function printSummary(
   options: CliOptions,
   state: NetworkDeploymentState,
   referenceResults: Record<ScriptName, ReferenceScriptDeployment>,
-  protocolDeployment: ProtocolParametersDeployment
+  protocolDeployment: ProtocolParametersDeployment,
 ): void {
   const sep = "─".repeat(70);
   console.log(`\n✅ Deployment complete!\n${sep}`);
@@ -1103,13 +1315,25 @@ function printSummary(
   console.log(`   Style:        ${options.style}`);
   console.log(`   Blueprint:    ${state.blueprintPath}`);
   console.log(`   Anchor:       ${state.anchor.txHash}#${state.anchor.txIx}`);
-  console.log(`   Protocol UTxO ${protocolDeployment.txHash}#${protocolDeployment.txIx}`);
-  console.log(`   Manifest:     ${path.relative(REPO_ROOT, DEPLOYMENT_MANIFEST_PATH)}`);
-  console.log(`   Frontend:     ${path.relative(REPO_ROOT, FRONTEND_GENERATED_PATH)}`);
-  console.log(`   Backend:      ${path.relative(REPO_ROOT, BACKEND_GENERATED_PATH)}`);
+  console.log(
+    `   Protocol UTxO ${protocolDeployment.txHash}#${protocolDeployment.txIx}`,
+  );
+  console.log(
+    `   Manifest:     ${path.relative(REPO_ROOT, DEPLOYMENT_MANIFEST_PATH)}`,
+  );
+  console.log(
+    `   Frontend:     ${path.relative(REPO_ROOT, FRONTEND_GENERATED_PATH)}`,
+  );
+  console.log(
+    `   Backend:      ${path.relative(REPO_ROOT, BACKEND_GENERATED_PATH)}`,
+  );
   console.log("\n# Reference scripts:");
-  for (const [name, deployment] of Object.entries(referenceResults).filter(([, entry]) => entry.txHash !== "")) {
-    console.log(`#   ${name}: ${deployment.txHash}#${deployment.txIx} (hash: ${deployment.hash})`);
+  for (const [name, deployment] of Object.entries(referenceResults).filter(
+    ([, entry]) => entry.txHash !== "",
+  )) {
+    console.log(
+      `#   ${name}: ${deployment.txHash}#${deployment.txIx} (hash: ${deployment.hash})`,
+    );
   }
   console.log(sep);
 }
@@ -1124,7 +1348,9 @@ async function main(): Promise<void> {
   const wallet = createWallet(provider, options.deployerSeed, options.network);
   const deployerAddress = await wallet.getChangeAddress();
   const configuredAnchor =
-    options.skipBuild && options.anchorTxHash === undefined && options.anchorTxIx === undefined
+    options.skipBuild &&
+    options.anchorTxHash === undefined &&
+    options.anchorTxIx === undefined
       ? readAnchorFromAikenToml(options.network)
       : {
           txHash: options.anchorTxHash,
@@ -1136,15 +1362,23 @@ async function main(): Promise<void> {
   console.log(`   Style:     ${options.style}`);
   console.log(`   Deployer:  ${deployerAddress}`);
 
-  const anchor = await resolveAnchorSelection(wallet, provider, configuredAnchor.txHash, configuredAnchor.txIx);
+  const anchor = await resolveAnchorSelection(
+    wallet,
+    provider,
+    configuredAnchor.txHash,
+    configuredAnchor.txIx,
+  );
   console.log(
     `   Anchor:    ${anchor.txHash}#${anchor.txIx} (${anchor.lovelace.toString()} lovelace${
       anchor.autoSelected ? ", auto-selected" : ""
-    })`
+    })`,
   );
 
   if (!options.skipBuild) {
-    updateAnchorInAikenToml(options.network, { txHash: anchor.txHash, txIx: anchor.txIx });
+    updateAnchorInAikenToml(options.network, {
+      txHash: anchor.txHash,
+      txIx: anchor.txIx,
+    });
     console.log(`   Updated:   ${path.relative(REPO_ROOT, AIKEN_TOML_PATH)}`);
   } else {
     console.log(`   Reusing:   ${path.relative(REPO_ROOT, AIKEN_TOML_PATH)}`);
@@ -1168,12 +1402,15 @@ async function main(): Promise<void> {
     options.style,
     blueprintPath,
     { txHash: anchor.txHash, txIx: anchor.txIx },
-    prepared
+    prepared,
   );
 
   let referenceResults: Record<ScriptName, ReferenceScriptDeployment>;
   if (options.resumePhase2) {
-    referenceResults = reuseRecordedReferenceDeployments(previousState, prepared);
+    referenceResults = reuseRecordedReferenceDeployments(
+      previousState,
+      prepared,
+    );
     applyReferenceDeployments(manifest[options.network], referenceResults);
   } else {
     referenceResults = blankReferenceScriptRecord();
@@ -1182,29 +1419,57 @@ async function main(): Promise<void> {
   syncDeploymentArtifacts(manifest);
 
   if (options.buildOnly) {
-    console.log("\n✅ Build complete. Deployment manifest and generated config files were updated.");
+    console.log(
+      "\n✅ Build complete. Deployment manifest and generated config files were updated.",
+    );
     return;
   }
 
   if (!options.resumePhase2) {
-    referenceResults = await deployReferenceScripts(wallet, provider, options.network, anchor, prepared);
+    referenceResults = await deployReferenceScripts(
+      wallet,
+      provider,
+      options.network,
+      anchor,
+      prepared,
+    );
     applyReferenceDeployments(manifest[options.network], referenceResults);
     syncDeploymentArtifacts(manifest);
 
-    console.log(`\n⏳ Waiting ${Math.floor(REF_SCRIPT_SETTLE_MS / 1000)}s for reference scripts to settle…`);
+    console.log(
+      `\n⏳ Waiting ${Math.floor(REF_SCRIPT_SETTLE_MS / 1000)}s for reference scripts to settle…`,
+    );
     await sleep(REF_SCRIPT_SETTLE_MS);
   } else {
-    console.log("\n⏭️  Reusing recorded phase-1 reference scripts from deployment manifest");
+    console.log(
+      "\n⏭️  Reusing recorded phase-1 reference scripts from deployment manifest",
+    );
   }
 
-  const protocolDeployment = await deployProtocolParameters(wallet, provider, anchor, prepared);
-  applyProtocolDeployment(manifest[options.network], protocolDeployment.deployment);
+  const protocolDeployment = await deployProtocolParameters(
+    wallet,
+    provider,
+    anchor,
+    prepared,
+  );
+  applyProtocolDeployment(
+    manifest[options.network],
+    protocolDeployment.deployment,
+  );
   syncDeploymentArtifacts(manifest);
 
-  printSummary(options, manifest[options.network], referenceResults, protocolDeployment.deployment);
+  printSummary(
+    options,
+    manifest[options.network],
+    referenceResults,
+    protocolDeployment.deployment,
+  );
 }
 
 main().catch((error: unknown) => {
-  console.error("\n❌ Deployment failed:", error instanceof Error ? error.message : error);
+  console.error(
+    "\n❌ Deployment failed:",
+    error instanceof Error ? error.message : error,
+  );
   process.exit(1);
 });

@@ -13,7 +13,7 @@ import {
   MeshTxBuilder,
   BlockfrostProvider,
 } from "@meshsdk/core";
-import type { BuilderData, Output, UTxO } from "@meshsdk/core";
+import type { BuilderData, Output, Protocol, UTxO } from "@meshsdk/core";
 import { sha3_256 } from "js-sha3";
 import {
   ATTESTATION_VALIDATOR_REFERENCE,
@@ -38,12 +38,18 @@ function getProvider() {
   return new BlockfrostProvider(BLOCKFROST_API_KEY);
 }
 
-function getTxBuilder(provider: BlockfrostProvider) {
-  return new MeshTxBuilder({
+function getTxBuilder(provider: BlockfrostProvider, protocolParams?: Protocol) {
+  const builder = new MeshTxBuilder({
     fetcher: provider,
     submitter: provider,
     evaluator: provider,
   });
+  if (protocolParams) builder.protocolParams(protocolParams);
+  return builder;
+}
+
+async function fetchProtocolParams(provider: BlockfrostProvider): Promise<Protocol> {
+  return provider.fetchProtocolParameters();
 }
 
 function referenceScriptSize(script: ReferenceScriptDeployment): string {
@@ -54,10 +60,14 @@ function calculateMinLovelace(builder: MeshTxBuilder, output: Output): bigint {
   return builder.calculateMinLovelaceForOutput(output);
 }
 
+type Budget = { mem: number; steps: number };
+const DEFAULT_BUDGET: Budget = { mem: 7_000_000, steps: 3_000_000_000 };
+
 function attachMintingScriptSource(
   builder: MeshTxBuilder,
   referenceScript: ReferenceScriptDeployment,
   redeemer: BuilderData["content"],
+  exUnits?: Budget,
 ): MeshTxBuilder {
   return builder
     .mintTxInReference(
@@ -66,7 +76,7 @@ function attachMintingScriptSource(
       referenceScriptSize(referenceScript),
       referenceScript.hash,
     )
-    .mintReferenceTxInRedeemerValue(redeemer, "Mesh");
+    .mintReferenceTxInRedeemerValue(redeemer, "Mesh", exUnits);
 }
 
 function attachSpendingScriptSource(
@@ -78,6 +88,7 @@ function attachSpendingScriptSource(
     amount: { unit: string; quantity: string }[];
     address: string;
   },
+  exUnits?: Budget,
 ): MeshTxBuilder {
   const tx = builder
     .spendingPlutusScriptV3()
@@ -91,7 +102,15 @@ function attachSpendingScriptSource(
       referenceScript.hash,
     )
     .spendingReferenceTxInInlineDatumPresent()
-    .spendingReferenceTxInRedeemerValue(redeemer, "Mesh");
+    .spendingReferenceTxInRedeemerValue(redeemer, "Mesh", exUnits);
+}
+
+async function evaluateTxActions(
+  provider: BlockfrostProvider,
+  serializedTx: string,
+): Promise<{ tag: string; index: number; budget: Budget }[]> {
+  const actions = await provider.evaluateTx(serializedTx);
+  return actions.map((a) => ({ tag: a.tag, index: a.index, budget: a.budget as Budget }));
 }
 
 function outRefKey(outRef: OutRef): string {
@@ -257,7 +276,10 @@ export async function mintSignerToken(
   },
 ): Promise<string> {
   const provider = getProvider();
-  const changeAddress = await wallet.getChangeAddress();
+  const [changeAddress, protocolParams] = await Promise.all([
+    wallet.getChangeAddress(),
+    fetchProtocolParams(provider),
+  ]);
   const collateral = await resolveCollateralSelection(wallet, provider, [
     { txHash: params.anchorUtxo.txHash, txIndex: params.anchorUtxo.txIndex },
   ]);
@@ -286,21 +308,11 @@ export async function mintSignerToken(
   );
 
   const inputLovelace = getLovelace(params.anchorUtxo.amount);
-  // Any existing non-lovelace tokens in the anchor UTxO must be returned to the
-  // signer output; otherwise MeshTxBuilder adds a 3rd change output which
-  // violates the contract's `expect [metadata_out, signer_out] = outputs` check.
-  const existingTokens = params.anchorUtxo.amount.filter(
-    (a) => a.unit !== "lovelace",
-  );
+  const existingTokens = params.anchorUtxo.amount.filter((a) => a.unit !== "lovelace");
 
-  const buildTx = (signerLovelace: bigint, feeOverride?: string) => {
-    const signerOutputAssets = [
-      { unit: "lovelace", quantity: signerLovelace.toString() },
-      ...existingTokens,
-      { unit: policyId + tokenName, quantity: "1" },
-    ];
-
-    let tx = getTxBuilder(provider)
+  const buildTx = (signerLovelace: bigint, feeOverride: string, mintBudget?: Budget) => {
+    let t = getTxBuilder(provider, protocolParams)
+      .changeAddress(changeAddress)
       .txIn(
         params.anchorUtxo.txHash,
         params.anchorUtxo.txIndex,
@@ -311,43 +323,43 @@ export async function mintSignerToken(
       .mintPlutusScriptV3()
       .mint("2", policyId, tokenName);
 
-    tx = attachMintingScriptSource(
-      tx,
-      SIGNER_TOKEN_POLICY_REFERENCE,
-      BigInt(protocolParamsIdx),
-    );
+    t = attachMintingScriptSource(t, SIGNER_TOKEN_POLICY_REFERENCE, BigInt(protocolParamsIdx), mintBudget);
 
-    tx = tx
+    t = t
       .txOut(params.signerMetadataAddress, [
         { unit: "lovelace", quantity: SIGNER_METADATA_LOVELACE.toString() },
         { unit: policyId + tokenName, quantity: "1" },
       ])
       .txOutInlineDatumValue(metadataDatum, "Mesh")
-      .txOut(changeAddress, signerOutputAssets)
+      .txOut(changeAddress, [
+        { unit: "lovelace", quantity: signerLovelace.toString() },
+        ...existingTokens,
+        { unit: policyId + tokenName, quantity: "1" },
+      ])
       .txInCollateral(
         collateral.input.txHash,
         collateral.input.outputIndex,
         collateral.output.amount,
         collateral.output.address,
-      );
+      )
+      .setFee(feeOverride);
 
-    if (feeOverride !== undefined) {
-      tx = tx.setFee(feeOverride);
-    }
-
-    return tx;
+    return t;
   };
 
-  const feeEstBuilder = buildTx(inputLovelace - SIGNER_METADATA_LOVELACE);
+  // Phase 1: offline fee estimate
+  const feeEstBuilder = buildTx(inputLovelace - SIGNER_METADATA_LOVELACE, "0", DEFAULT_BUDGET);
   feeEstBuilder.completeSync();
-  const estimatedFee = feeEstBuilder.calculateFee();
-  const adjustedFee = BigInt(Math.ceil(Number(estimatedFee) * 1.1));
+  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const signerLovelace = inputLovelace - SIGNER_METADATA_LOVELACE - generousFee;
 
-  const signerLovelace = inputLovelace - SIGNER_METADATA_LOVELACE - adjustedFee;
-  const unsignedTx = buildTx(
-    signerLovelace,
-    adjustedFee.toString(),
-  ).completeSync();
+  // Phase 2: evaluate to get real execution units
+  const evalSerialized = buildTx(signerLovelace, generousFee.toString(), DEFAULT_BUDGET).completeSync();
+  const actions = await evaluateTxActions(provider, evalSerialized);
+  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+
+  // Phase 3: final tx with real execution units → correct scriptIntegrityHash
+  const unsignedTx = buildTx(signerLovelace, generousFee.toString(), mintBudget).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);
@@ -374,10 +386,14 @@ export async function createAttestation(
     stakingPolicy?: string;
     mintingPolicy?: string;
     referencedScriptCbor?: string;
+    counterAttestation?: boolean;
   },
 ): Promise<string> {
   const provider = getProvider();
-  const changeAddress = await wallet.getChangeAddress();
+  const [changeAddress, protocolParams] = await Promise.all([
+    wallet.getChangeAddress(),
+    fetchProtocolParams(provider),
+  ]);
   const collateral = await resolveCollateralSelection(wallet, provider, [
     { txHash: params.signerUtxo.txHash, txIndex: params.signerUtxo.txIndex },
   ]);
@@ -393,13 +409,11 @@ export async function createAttestation(
     params.scriptAddress ?? "",
     params.stakingPolicy ?? "",
     params.mintingPolicy ?? "",
+    params.counterAttestation ?? false,
   );
 
-  const existingTokens = params.signerUtxo.amount.filter(
-    (asset) => asset.unit !== "lovelace",
-  );
   const inputLovelace = getLovelace(params.signerUtxo.amount);
-  const minLovelaceBuilder = getTxBuilder(provider);
+  const minLovelaceBuilder = getTxBuilder(provider, protocolParams);
 
   const attestationOutputMinLovelace = calculateMinLovelace(
     minLovelaceBuilder,
@@ -427,13 +441,17 @@ export async function createAttestation(
     attestationOutputMinLovelace > MIN_ATTESTATION_LOVELACE
       ? attestationOutputMinLovelace
       : MIN_ATTESTATION_LOVELACE;
-  const signerOutputMinLovelace = calculateMinLovelace(minLovelaceBuilder, {
-    address: changeAddress,
-    amount: [{ unit: "lovelace", quantity: "0" }, ...existingTokens],
-  });
+  if (inputLovelace < attestationLovelace) {
+    throw new Error(
+      `Selected signer UTxO does not hold enough lovelace. It needs at least ${attestationLovelace.toString()} lovelace for the attestation output.`,
+    );
+  }
 
-  const buildTx = (signerLovelace: bigint, feeOverride?: string) => {
-    let tx = getTxBuilder(provider)
+  const existingTokens = params.signerUtxo.amount.filter((a) => a.unit !== "lovelace");
+
+  const buildTx = (signerLovelace: bigint, feeOverride: string, mintBudget?: Budget) => {
+    let t = getTxBuilder(provider, protocolParams)
+      .changeAddress(changeAddress)
       .txIn(
         params.signerUtxo.txHash,
         params.signerUtxo.txIndex,
@@ -444,13 +462,9 @@ export async function createAttestation(
       .mintPlutusScriptV3()
       .mint("1", sigPolicyId, params.signerTokenName);
 
-    tx = attachMintingScriptSource(
-      tx,
-      SIGNATURE_TOKEN_POLICY_REFERENCE,
-      mintRedeemer,
-    );
+    t = attachMintingScriptSource(t, SIGNATURE_TOKEN_POLICY_REFERENCE, mintRedeemer, mintBudget);
 
-    tx = tx
+    t = t
       .txOut(params.attestationValidatorAddress, [
         { unit: "lovelace", quantity: attestationLovelace.toString() },
         { unit: sigPolicyId + params.signerTokenName, quantity: "1" },
@@ -458,10 +472,10 @@ export async function createAttestation(
       .txOutInlineDatumValue(datum, "Mesh");
 
     if (params.referencedScriptCbor) {
-      tx = tx.txOutReferenceScript(params.referencedScriptCbor, "V3");
+      t = t.txOutReferenceScript(params.referencedScriptCbor, "V3");
     }
 
-    tx = tx
+    t = t
       .txOut(changeAddress, [
         { unit: "lovelace", quantity: signerLovelace.toString() },
         ...existingTokens,
@@ -471,43 +485,25 @@ export async function createAttestation(
         collateral.input.outputIndex,
         collateral.output.amount,
         collateral.output.address,
-      );
+      )
+      .setFee(feeOverride);
 
-    if (feeOverride !== undefined) {
-      tx = tx.setFee(feeOverride);
-    }
-
-    return tx;
+    return t;
   };
 
-  const maxSignerLovelaceBeforeFee = inputLovelace - attestationLovelace;
-  if (maxSignerLovelaceBeforeFee < signerOutputMinLovelace) {
-    throw new Error(
-      `Selected signer UTxO does not hold enough lovelace. This flow needs a single signer-token UTxO with at least ${(
-        attestationLovelace + signerOutputMinLovelace
-      ).toString()} lovelace before fees.`,
-    );
-  }
-
-  const feeEstBuilder = buildTx(maxSignerLovelaceBeforeFee);
+  // Phase 1: offline fee estimate
+  const feeEstBuilder = buildTx(inputLovelace - attestationLovelace, "0", DEFAULT_BUDGET);
   feeEstBuilder.completeSync();
-  const estimatedFee = feeEstBuilder.calculateFee();
-  const adjustedFee = BigInt(Math.ceil(Number(estimatedFee) * 1.1));
-  const signerLovelace = inputLovelace - attestationLovelace - adjustedFee;
-  if (signerLovelace < signerOutputMinLovelace) {
-    throw new Error(
-      `Selected signer UTxO does not hold enough lovelace. This flow needs at least ${(
-        attestationLovelace +
-        signerOutputMinLovelace +
-        adjustedFee
-      ).toString()} lovelace in the signer-token UTxO, including fees.`,
-    );
-  }
+  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const signerLovelace = inputLovelace - attestationLovelace - generousFee;
 
-  const unsignedTx = buildTx(
-    signerLovelace,
-    adjustedFee.toString(),
-  ).completeSync();
+  // Phase 2: evaluate for real execution units
+  const evalSerialized = buildTx(signerLovelace, generousFee.toString(), DEFAULT_BUDGET).completeSync();
+  const actions = await evaluateTxActions(provider, evalSerialized);
+  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+
+  // Phase 3: final tx with correct scriptIntegrityHash
+  const unsignedTx = buildTx(signerLovelace, generousFee.toString(), mintBudget).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);
@@ -531,8 +527,10 @@ export async function signAttestation(
   },
 ): Promise<string> {
   const provider = getProvider();
-  const changeAddress = await wallet.getChangeAddress();
-
+  const [changeAddress, protocolParams] = await Promise.all([
+    wallet.getChangeAddress(),
+    fetchProtocolParams(provider),
+  ]);
   const sigPolicyId = params.protocolDatum.signature_token_policy;
 
   const attIn = {
@@ -563,14 +561,6 @@ export async function signAttestation(
     })),
     { unit: sigPolicyId + params.signerTokenName, quantity: "1" },
   ];
-  const existingSignerTokens = params.signerUtxo.amount.filter(
-    (asset) => asset.unit !== "lovelace",
-  );
-  const signerInputLovelace = getLovelace(params.signerUtxo.amount);
-  const signerOutputMinLovelace = calculateMinLovelace(getTxBuilder(provider), {
-    address: changeAddress,
-    amount: [{ unit: "lovelace", quantity: "0" }, ...existingSignerTokens],
-  });
   const attestationInputAssets = [
     { unit: "lovelace", quantity: params.attestationUtxo.lovelace },
     ...params.attestationUtxo.signers.map((s) => ({
@@ -588,44 +578,33 @@ export async function signAttestation(
     datum.script_address,
     datum.staking_policy,
     datum.minting_policy,
+    datum.counter_attestation,
   );
 
-  const buildTx = (signerLovelace: bigint, feeOverride?: string) => {
-    let tx = getTxBuilder(provider).readOnlyTxInReference(
-      PROTOCOL_PARAMS_TX_HASH,
-      PROTOCOL_PARAMS_TX_IX,
-    );
+  const signerInputLovelace = getLovelace(params.signerUtxo.amount);
+  const existingSignerTokens = params.signerUtxo.amount.filter((a) => a.unit !== "lovelace");
+
+  const buildTx = (signerLovelace: bigint, feeOverride: string, spendBudget?: Budget, mintBudget?: Budget) => {
+    let t = getTxBuilder(provider, protocolParams)
+      .changeAddress(changeAddress)
+      .readOnlyTxInReference(PROTOCOL_PARAMS_TX_HASH, PROTOCOL_PARAMS_TX_IX);
 
     for (const inp of sorted) {
       if (inp.txHash === attIn.txHash && inp.txIndex === attIn.txIndex) {
-        tx = attachSpendingScriptSource(
-          tx,
-          inp,
-          ATTESTATION_VALIDATOR_REFERENCE,
-          attRedeemer,
-          {
-            amount: attestationInputAssets,
-            address: params.attestationValidatorAddress,
-          },
+        t = attachSpendingScriptSource(
+          t, inp, ATTESTATION_VALIDATOR_REFERENCE, attRedeemer,
+          { amount: attestationInputAssets, address: params.attestationValidatorAddress },
+          spendBudget,
         );
       } else {
-        tx = tx.txIn(
-          inp.txHash,
-          inp.txIndex,
-          params.signerUtxo.amount,
-          changeAddress,
-        );
+        t = t.txIn(inp.txHash, inp.txIndex, params.signerUtxo.amount, changeAddress);
       }
     }
 
-    tx = tx.mintPlutusScriptV3().mint("1", sigPolicyId, params.signerTokenName);
-    tx = attachMintingScriptSource(
-      tx,
-      SIGNATURE_TOKEN_POLICY_REFERENCE,
-      mintRedeemer,
-    );
+    t = t.mintPlutusScriptV3().mint("1", sigPolicyId, params.signerTokenName);
+    t = attachMintingScriptSource(t, SIGNATURE_TOKEN_POLICY_REFERENCE, mintRedeemer, mintBudget);
 
-    tx = tx
+    t = t
       .txOut(params.attestationValidatorAddress, updatedAssets)
       .txOutInlineDatumValue(existingDatum, "Mesh")
       .txOut(changeAddress, [
@@ -637,32 +616,26 @@ export async function signAttestation(
         collateral.input.outputIndex,
         collateral.output.amount,
         collateral.output.address,
-      );
+      )
+      .setFee(feeOverride);
 
-    if (feeOverride !== undefined) {
-      tx = tx.setFee(feeOverride);
-    }
-
-    return tx;
+    return t;
   };
 
-  const feeEstBuilder = buildTx(signerInputLovelace);
+  // Phase 1: offline fee estimate
+  const feeEstBuilder = buildTx(signerInputLovelace, "0", DEFAULT_BUDGET, DEFAULT_BUDGET);
   feeEstBuilder.completeSync();
-  const estimatedFee = feeEstBuilder.calculateFee();
-  const adjustedFee = BigInt(Math.ceil(Number(estimatedFee) * 1.1));
-  const signerLovelace = signerInputLovelace - adjustedFee;
-  if (signerLovelace < signerOutputMinLovelace) {
-    throw new Error(
-      `Selected signer UTxO does not hold enough lovelace. This flow needs at least ${(
-        signerOutputMinLovelace + adjustedFee
-      ).toString()} lovelace in the signer-token UTxO, including fees.`,
-    );
-  }
+  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const signerLovelace = signerInputLovelace - generousFee;
 
-  const unsignedTx = buildTx(
-    signerLovelace,
-    adjustedFee.toString(),
-  ).completeSync();
+  // Phase 2: evaluate for real execution units
+  const evalSerialized = buildTx(signerLovelace, generousFee.toString(), DEFAULT_BUDGET, DEFAULT_BUDGET).completeSync();
+  const actions = await evaluateTxActions(provider, evalSerialized);
+  const spendBudget = actions.find((a) => a.tag === "spend" && a.index === attIdx)?.budget;
+  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+
+  // Phase 3: final tx with correct scriptIntegrityHash
+  const unsignedTx = buildTx(signerLovelace, generousFee.toString(), spendBudget, mintBudget).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);
@@ -686,7 +659,10 @@ export async function retireAttestation(
   },
 ): Promise<string> {
   const provider = getProvider();
-  const changeAddress = await wallet.getChangeAddress();
+  const [changeAddress, protocolParams] = await Promise.all([
+    wallet.getChangeAddress(),
+    fetchProtocolParams(provider),
+  ]);
 
   const sigPolicyId = params.protocolDatum.signature_token_policy;
 
@@ -716,57 +692,35 @@ export async function retireAttestation(
       quantity: s.quantity,
     })),
   ];
-  const existingSignerTokens = params.signerUtxo.amount.filter(
-    (asset) => asset.unit !== "lovelace",
-  );
   const totalInputLovelace =
-    getLovelace(params.signerUtxo.amount) +
-    BigInt(params.attestationUtxo.lovelace);
-  const signerOutputMinLovelace = calculateMinLovelace(getTxBuilder(provider), {
-    address: changeAddress,
-    amount: [{ unit: "lovelace", quantity: "0" }, ...existingSignerTokens],
-  });
+    getLovelace(params.signerUtxo.amount) + BigInt(params.attestationUtxo.lovelace);
+  const existingSignerTokens = params.signerUtxo.amount.filter((a) => a.unit !== "lovelace");
 
-  const buildTx = (walletOutputLovelace: bigint, feeOverride?: string) => {
-    let tx = getTxBuilder(provider).readOnlyTxInReference(
-      PROTOCOL_PARAMS_TX_HASH,
-      PROTOCOL_PARAMS_TX_IX,
-    );
+  const buildTx = (walletLovelace: bigint, feeOverride: string, spendBudget?: Budget, mintBudget?: Budget) => {
+    let t = getTxBuilder(provider, protocolParams)
+      .changeAddress(changeAddress)
+      .readOnlyTxInReference(PROTOCOL_PARAMS_TX_HASH, PROTOCOL_PARAMS_TX_IX);
 
     for (const inp of sorted) {
       if (inp.txHash === attIn.txHash && inp.txIndex === attIn.txIndex) {
-        tx = attachSpendingScriptSource(
-          tx,
-          inp,
-          ATTESTATION_VALIDATOR_REFERENCE,
-          attRedeemer,
-          {
-            amount: attestationInputAssets,
-            address: params.attestationValidatorAddress,
-          },
+        t = attachSpendingScriptSource(
+          t, inp, ATTESTATION_VALIDATOR_REFERENCE, attRedeemer,
+          { amount: attestationInputAssets, address: params.attestationValidatorAddress },
+          spendBudget,
         );
       } else {
-        tx = tx.txIn(
-          inp.txHash,
-          inp.txIndex,
-          params.signerUtxo.amount,
-          changeAddress,
-        );
+        t = t.txIn(inp.txHash, inp.txIndex, params.signerUtxo.amount, changeAddress);
       }
     }
 
     for (const sig of params.attestationUtxo.signers) {
-      tx = tx.mintPlutusScriptV3().mint("-1", sigPolicyId, sig.tokenName);
-      tx = attachMintingScriptSource(
-        tx,
-        SIGNATURE_TOKEN_POLICY_REFERENCE,
-        burnRedeemer,
-      );
+      t = t.mintPlutusScriptV3().mint("-1", sigPolicyId, sig.tokenName);
+      t = attachMintingScriptSource(t, SIGNATURE_TOKEN_POLICY_REFERENCE, burnRedeemer, mintBudget);
     }
 
-    tx = tx
+    t = t
       .txOut(changeAddress, [
-        { unit: "lovelace", quantity: walletOutputLovelace.toString() },
+        { unit: "lovelace", quantity: walletLovelace.toString() },
         ...existingSignerTokens,
       ])
       .txInCollateral(
@@ -774,32 +728,26 @@ export async function retireAttestation(
         collateral.input.outputIndex,
         collateral.output.amount,
         collateral.output.address,
-      );
+      )
+      .setFee(feeOverride);
 
-    if (feeOverride !== undefined) {
-      tx = tx.setFee(feeOverride);
-    }
-
-    return tx;
+    return t;
   };
 
-  const feeEstBuilder = buildTx(totalInputLovelace);
+  // Phase 1: offline fee estimate
+  const feeEstBuilder = buildTx(totalInputLovelace, "0", DEFAULT_BUDGET, DEFAULT_BUDGET);
   feeEstBuilder.completeSync();
-  const estimatedFee = feeEstBuilder.calculateFee();
-  const adjustedFee = BigInt(Math.ceil(Number(estimatedFee) * 1.1));
-  const walletOutputLovelace = totalInputLovelace - adjustedFee;
-  if (walletOutputLovelace < signerOutputMinLovelace) {
-    throw new Error(
-      `Retire transaction does not leave enough lovelace for the return UTxO. It needs at least ${(
-        signerOutputMinLovelace + adjustedFee
-      ).toString()} lovelace across the signer and attestation inputs, including fees.`,
-    );
-  }
+  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const walletLovelace = totalInputLovelace - generousFee;
 
-  const unsignedTx = buildTx(
-    walletOutputLovelace,
-    adjustedFee.toString(),
-  ).completeSync();
+  // Phase 2: evaluate for real execution units
+  const evalSerialized = buildTx(walletLovelace, generousFee.toString(), DEFAULT_BUDGET, DEFAULT_BUDGET).completeSync();
+  const actions = await evaluateTxActions(provider, evalSerialized);
+  const spendBudget = actions.find((a) => a.tag === "spend" && a.index === attIdx)?.budget;
+  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+
+  // Phase 3: final tx with correct scriptIntegrityHash
+  const unsignedTx = buildTx(walletLovelace, generousFee.toString(), spendBudget, mintBudget).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);

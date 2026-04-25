@@ -12,6 +12,7 @@ interface Props {
   total: number;
   isConnected: boolean;
   onSign: (a: AttestationUtxo) => void;
+  onSignCounter: (a: AttestationUtxo) => void;
   onRetire: (a: AttestationUtxo) => void;
   onCreateNew: () => void;
   onFilterChange: (f: { scriptHash: string; scriptAddress: string; mintingPolicy: string }) => void;
@@ -22,6 +23,16 @@ function Badge({ count }: { count: number }) {
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${color}`}>
       <Icons.Shield className="w-3 h-3" />
+      {count}
+    </span>
+  );
+}
+
+function CounterBadge({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border text-red-300 bg-red-900/30 border-red-700/40">
+      <Icons.ShieldX className="w-3 h-3" />
       {count}
     </span>
   );
@@ -42,12 +53,14 @@ function AttestationRow({
   signers,
   isConnected,
   onSign,
+  onSignCounter,
   onRetire,
 }: {
   attestation: AttestationUtxo;
   signers: SignerUtxo[];
   isConnected: boolean;
   onSign: () => void;
+  onSignCounter: () => void;
   onRetire: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -77,7 +90,10 @@ function AttestationRow({
           </a>
         </td>
         <td className="px-4 py-3">
-          <Badge count={attestation.signerCount} />
+          <div className="flex items-center gap-1.5">
+            <Badge count={attestation.signerCount} />
+            <CounterBadge count={attestation.counterSignerCount} />
+          </div>
         </td>
         <td className="px-4 py-3 text-xs text-gray-400 font-mono hidden lg:table-cell">
           {attestation.referenceScriptHash ? (
@@ -107,8 +123,15 @@ function AttestationRow({
                   <Icons.Pen className="w-4 h-4" />
                 </button>
                 <button
-                  onClick={onRetire}
+                  onClick={onSignCounter}
                   className="p-1.5 rounded-lg text-gray-500 hover:text-red-400 hover:bg-red-400/10 transition-colors"
+                  title="Sign counter-attestation"
+                >
+                  <Icons.ShieldX className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={onRetire}
+                  className="p-1.5 rounded-lg text-gray-500 hover:text-orange-400 hover:bg-orange-400/10 transition-colors"
                   title="Retire attestation"
                 >
                   <Icons.Trash className="w-4 h-4" />
@@ -174,6 +197,7 @@ export function AttestationsTable({
   total,
   isConnected,
   onSign,
+  onSignCounter,
   onRetire,
   onCreateNew,
   onFilterChange,
@@ -286,6 +310,7 @@ export function AttestationsTable({
                   signers={signers}
                   isConnected={isConnected}
                   onSign={() => onSign(a)}
+                  onSignCounter={() => onSignCounter(a)}
                   onRetire={() => onRetire(a)}
                 />
               ))}

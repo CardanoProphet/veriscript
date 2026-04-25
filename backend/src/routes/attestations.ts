@@ -48,6 +48,7 @@ function utxoToAttestation(
     datum,
     signers,
     signerCount: signers.length,
+    counterSignerCount: 0,
     lovelace,
     referenceScriptHash,
     constituents: [
@@ -91,21 +92,33 @@ function mergeAttestations(
   }
 
   return [...groups.values()].map((group) => {
-    const representative = group[0];
+    // Prefer a non-counter attestation as the representative
+    const representative =
+      group.find((a) => !a.datum.counter_attestation) ?? group[0];
 
     const seenTokenNames = new Set<string>();
     const mergedSigners: SignatureToken[] = [];
-    // Only unspent UTxOs are retirable; retired ones still contribute signers.
+    const seenCounterTokenNames = new Set<string>();
+    let counterSignerCount = 0;
     const constituents: AttestationConstituent[] = [];
 
     for (const att of group) {
       if (unspentKeys.has(`${att.txHash}#${att.txIx}`)) {
         constituents.push(...att.constituents);
       }
-      for (const signer of att.signers) {
-        if (!seenTokenNames.has(signer.tokenName)) {
-          seenTokenNames.add(signer.tokenName);
-          mergedSigners.push(signer);
+      if (att.datum.counter_attestation) {
+        for (const signer of att.signers) {
+          if (!seenCounterTokenNames.has(signer.tokenName)) {
+            seenCounterTokenNames.add(signer.tokenName);
+            counterSignerCount++;
+          }
+        }
+      } else {
+        for (const signer of att.signers) {
+          if (!seenTokenNames.has(signer.tokenName)) {
+            seenTokenNames.add(signer.tokenName);
+            mergedSigners.push(signer);
+          }
         }
       }
     }
@@ -117,6 +130,7 @@ function mergeAttestations(
       ...representative,
       signers: mergedSigners,
       signerCount: mergedSigners.length,
+      counterSignerCount,
       referenceScriptHash,
       constituents,
     };

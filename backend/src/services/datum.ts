@@ -23,28 +23,35 @@ function toBuffer(value: unknown): Buffer {
   return Buffer.alloc(0);
 }
 
-function extractFields(decoded: unknown): Buffer[] {
+function extractFields(decoded: unknown): unknown[] {
   if (decoded instanceof cbor.Tagged) {
     const val = decoded.value;
-    if (Array.isArray(val)) return val.map(toBuffer);
+    if (Array.isArray(val)) return val;
   }
   return [];
+}
+
+function toBoolField(value: unknown): boolean {
+  // Plutus Bool: False = Constr 0 (tag 121), True = Constr 1 (tag 122)
+  if (value instanceof cbor.Tagged) return value.tag === 122;
+  return false;
 }
 
 export function parseAttestationDatum(hex: string): AttestationDatum | null {
   try {
     const decoded = cbor.decodeFirstSync(Buffer.from(hex, "hex"));
     const fields = extractFields(decoded);
-    if (fields.length !== 7) return null;
+    if (fields.length !== 7 && fields.length !== 8) return null;
 
     return {
-      original_author: fields[0].toString("hex"),
-      description: bufferToUtf8OrHex(fields[1]),
-      source_code: bufferToUtf8OrHex(fields[2]),
-      script_hash: fields[3].toString("hex"),
-      script_address: bufferToUtf8OrHex(fields[4]),
-      staking_policy: fields[5].toString("hex"),
-      minting_policy: fields[6].toString("hex"),
+      original_author: toBuffer(fields[0]).toString("hex"),
+      description: bufferToUtf8OrHex(toBuffer(fields[1])),
+      source_code: bufferToUtf8OrHex(toBuffer(fields[2])),
+      script_hash: toBuffer(fields[3]).toString("hex"),
+      script_address: bufferToUtf8OrHex(toBuffer(fields[4])),
+      staking_policy: toBuffer(fields[5]).toString("hex"),
+      minting_policy: toBuffer(fields[6]).toString("hex"),
+      counter_attestation: fields.length === 8 ? toBoolField(fields[7]) : false,
     };
   } catch {
     return null;
@@ -60,10 +67,10 @@ export function parseSignerMetadataDatum(
     if (fields.length !== 4) return null;
 
     return {
-      nick_name: bufferToUtf8OrHex(fields[0]),
-      real_name: bufferToUtf8OrHex(fields[1]),
-      contact_info: bufferToUtf8OrHex(fields[2]),
-      additional_info: bufferToUtf8OrHex(fields[3]),
+      nick_name: bufferToUtf8OrHex(toBuffer(fields[0])),
+      real_name: bufferToUtf8OrHex(toBuffer(fields[1])),
+      contact_info: bufferToUtf8OrHex(toBuffer(fields[2])),
+      additional_info: bufferToUtf8OrHex(toBuffer(fields[3])),
     };
   } catch {
     return null;
@@ -79,10 +86,10 @@ export function parseProtocolParametersDatum(
     if (fields.length !== 4) return null;
 
     return {
-      signer_token_policy: fields[0].toString("hex"),
-      signer_metadata_validator: fields[1].toString("hex"),
-      signature_token_policy: fields[2].toString("hex"),
-      attestation_validator: fields[3].toString("hex"),
+      signer_token_policy: toBuffer(fields[0]).toString("hex"),
+      signer_metadata_validator: toBuffer(fields[1]).toString("hex"),
+      signature_token_policy: toBuffer(fields[2]).toString("hex"),
+      attestation_validator: toBuffer(fields[3]).toString("hex"),
     };
   } catch {
     return null;

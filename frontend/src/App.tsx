@@ -6,6 +6,7 @@ import { ToastContainer } from "./components/Toast";
 import { MintSignerTokenModal } from "./components/modals/MintSignerTokenModal";
 import { CreateAttestationModal } from "./components/modals/CreateAttestationModal";
 import { SignAttestationModal } from "./components/modals/SignAttestationModal";
+import { SignCounterAttestationModal } from "./components/modals/SignCounterAttestationModal";
 import { RetireAttestationModal } from "./components/modals/RetireAttestationModal";
 import { useWallet } from "./hooks/useWallet";
 import { useAttestations, useSigners, useConfig } from "./hooks/useAttestations";
@@ -15,6 +16,7 @@ type Modal =
   | { type: "mintSigner" }
   | { type: "createAttestation" }
   | { type: "signAttestation"; attestation: AttestationUtxo }
+  | { type: "signCounterAttestation"; attestation: AttestationUtxo }
   | { type: "retireAttestation"; attestation: AttestationUtxo }
   | null;
 
@@ -132,6 +134,7 @@ export default function App() {
             total={total}
             isConnected={!!connected}
             onSign={(a) => setModal({ type: "signAttestation", attestation: a })}
+            onSignCounter={(a) => setModal({ type: "signCounterAttestation", attestation: a })}
             onRetire={(a) => setModal({ type: "retireAttestation", attestation: a })}
             onCreateNew={() => setModal({ type: "createAttestation" })}
             onFilterChange={setFilter}
@@ -166,6 +169,18 @@ export default function App() {
 
       {modal?.type === "signAttestation" && connected && protocolDatum && (
         <SignAttestationModal
+          wallet={connected.wallet}
+          attestation={modal.attestation}
+          protocolDatum={protocolDatum}
+          attestationValidatorAddress={attestationValidatorAddress}
+          onClose={() => setModal(null)}
+          onSuccess={onSuccess}
+          onError={onError}
+        />
+      )}
+
+      {modal?.type === "signCounterAttestation" && connected && protocolDatum && (
+        <SignCounterAttestationModal
           wallet={connected.wallet}
           attestation={modal.attestation}
           protocolDatum={protocolDatum}

@@ -45,6 +45,7 @@ fn mock_attestation_datum() -> AttestationDatum {
     script_address: #"babe",
     staking_policy: #"",
     minting_policy: #"",
+    counter_attestation: False,
   }
 }
 
@@ -332,6 +333,7 @@ test mint_new_attestation_fails_bad_datum() fail {
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     }
   let bad_output =
     Output {
@@ -394,6 +396,7 @@ test prop_mint_new_attestation_any_valid_datum(
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     }
   let fuzz_output =
     Output {
@@ -472,6 +475,7 @@ test datum_valid_with_script_address() {
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -487,6 +491,7 @@ test datum_valid_with_staking_policy() {
       script_address: #"",
       staking_policy: #"c0ffee",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -502,6 +507,7 @@ test datum_valid_with_minting_policy() {
       script_address: #"",
       staking_policy: #"",
       minting_policy: #"c0ffee",
+      counter_attestation: False,
     },
   )
 }
@@ -517,6 +523,7 @@ test datum_valid_with_all_optional_fields_filled() {
       script_address: #"babe",
       staking_policy: #"c0ffee",
       minting_policy: #"facade",
+      counter_attestation: False,
     },
   )
 }
@@ -532,6 +539,7 @@ test datum_fails_wrong_original_author() fail {
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -547,6 +555,7 @@ test datum_fails_empty_description() fail {
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -562,6 +571,7 @@ test datum_fails_empty_source_code() fail {
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -577,6 +587,7 @@ test datum_fails_empty_script_hash() fail {
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -592,6 +603,7 @@ test datum_fails_all_address_and_policy_fields_empty() fail {
       script_address: #"",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -614,6 +626,7 @@ test prop_datum_valid_when_required_fields_non_empty(
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -631,6 +644,7 @@ test prop_datum_fails_with_empty_description(
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -651,6 +665,7 @@ test prop_datum_fails_when_all_address_fields_empty(
       script_address: #"",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }
@@ -669,6 +684,7 @@ test prop_datum_any_single_address_field_is_sufficient(
       script_address,
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     },
   )
 }

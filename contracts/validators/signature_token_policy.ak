@@ -35,6 +35,7 @@ pub fn is_attestation_datum_correct(
     script_address,
     staking_policy,
     minting_policy,
+    ..
   } = attestation_datum
 
   let original_author_correct = original_author == signer_token_name

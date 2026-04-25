@@ -25,6 +25,7 @@ export function attestationDatum(
   scriptAddress: string,
   stakingPolicy: string,
   mintingPolicy: string,
+  counterAttestation = false,
 ) {
   return {
     alternative: 0,
@@ -36,6 +37,7 @@ export function attestationDatum(
       textToHex(scriptAddress),
       stakingPolicy,
       mintingPolicy,
+      { alternative: counterAttestation ? 1 : 0, fields: [] },
     ],
   };
 }

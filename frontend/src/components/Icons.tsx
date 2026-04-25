@@ -102,3 +102,19 @@ export function Mail({ className }: IconProps) {
     </svg>
   );
 }
+
+export function ShieldX({ className }: IconProps) {
+  return (
+    <svg className={`${base} ${className}`} viewBox="0 0 24 24" stroke="currentColor">
+      {stroked("M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z M9.5 9.5l5 5 M14.5 9.5l-5 5")}
+    </svg>
+  );
+}
+
+export function MessageSquare({ className }: IconProps) {
+  return (
+    <svg className={`${base} ${className}`} viewBox="0 0 24 24" stroke="currentColor">
+      {stroked("M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z")}
+    </svg>
+  );
+}

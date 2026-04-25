@@ -47,4 +47,5 @@ pub type AttestationDatum {
   script_address: ByteArray,
   staking_policy: ByteArray,
   minting_policy: ByteArray,
+  counter_attestation: Bool,
 }

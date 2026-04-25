@@ -157,6 +157,7 @@ fn mock_attest_datum() -> AttestationDatum {
     script_address: #"babe",
     staking_policy: #"",
     minting_policy: #"",
+    counter_attestation: False,
   }
 }
 
@@ -382,6 +383,7 @@ test sign_fails_datum_changed() fail {
       script_address: #"babe",
       staking_policy: #"",
       minting_policy: #"",
+      counter_attestation: False,
     }
   let different_output =
     Output {

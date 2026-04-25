@@ -60,6 +60,16 @@ export function Navbar({
 
         {/* Right controls */}
         <div className="flex items-center gap-3">
+          <a
+            href="https://forms.gle/1Y3S2MyXoXQzdmw5A"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-white/10 transition-all"
+          >
+            <Icons.MessageSquare className="w-4 h-4" />
+            Feedback
+          </a>
+
           {connected && (
             <button
               onClick={onMintSigner}
