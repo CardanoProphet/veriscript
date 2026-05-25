@@ -2,8 +2,11 @@
  * VeriScript transaction builders using MeshSDK.
  *
  * Contract constraints:
- * - MintSignerToken: EXACTLY 1 input. Choose a UTxO with ≥ 6 ADA.
- * - CreateAttestation: EXACTLY 1 input (the signer's UTxO with signer token).
+ * - MintSignerToken: choose a wallet UTxO with ≥ 6 ADA; its outref seeds
+ *   the signer-token name. Extra wallet inputs/outputs are allowed; the
+ *   redeemer carries the indices of the signer input and metadata output.
+ * - CreateAttestation: extra wallet inputs/outputs are allowed; the
+ *   redeemer carries the signer-input index and attestation-output index.
  * - SignAttestation: 2 inputs sorted by outref; indices must match sorted order.
  * - RetireAttestation: 2 inputs; all signature tokens are burned.
  */
@@ -14,10 +17,16 @@ import {
   BlockfrostProvider,
 } from "@meshsdk/core";
 import type { BuilderData, Output, Protocol, UTxO } from "@meshsdk/core";
+import {
+  DEFAULT_V1_COST_MODEL_LIST,
+  DEFAULT_V2_COST_MODEL_LIST,
+  DEFAULT_V3_COST_MODEL_LIST,
+} from "@meshsdk/common";
 import { sha3_256 } from "js-sha3";
 import {
   ATTESTATION_VALIDATOR_REFERENCE,
   BLOCKFROST_API_KEY,
+  BLOCKFROST_URL,
   MIN_ATTESTATION_LOVELACE,
   MIN_COLLATERAL_LOVELACE,
   PROTOCOL_PARAMS_TX_HASH,
@@ -48,7 +57,39 @@ function getTxBuilder(provider: BlockfrostProvider, protocolParams?: Protocol) {
   return builder;
 }
 
-async function fetchProtocolParams(provider: BlockfrostProvider): Promise<Protocol> {
+let costModelSyncPromise: Promise<void> | null = null;
+async function syncMeshCostModels(): Promise<void> {
+  const res = await fetch(`${BLOCKFROST_URL}/epochs/latest/parameters`, {
+    headers: { project_id: BLOCKFROST_API_KEY },
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Failed to fetch protocol parameters from Blockfrost: ${res.status} ${res.statusText}`,
+    );
+  }
+  const params = (await res.json()) as {
+    cost_models?: Record<string, Record<string, number> | number[] | null>;
+  };
+  const cm = params.cost_models ?? {};
+  const targets: Array<[string, number[]]> = [
+    ["PlutusV1", DEFAULT_V1_COST_MODEL_LIST],
+    ["PlutusV2", DEFAULT_V2_COST_MODEL_LIST],
+    ["PlutusV3", DEFAULT_V3_COST_MODEL_LIST],
+  ];
+  for (const [lang, target] of targets) {
+    const live = cm[lang];
+    if (!live) continue;
+    const values = Array.isArray(live) ? live : Object.values(live);
+    target.length = 0;
+    for (const v of values) target.push(Number(v));
+  }
+}
+
+async function fetchProtocolParams(
+  provider: BlockfrostProvider,
+): Promise<Protocol> {
+  if (!costModelSyncPromise) costModelSyncPromise = syncMeshCostModels();
+  await costModelSyncPromise;
   return provider.fetchProtocolParameters();
 }
 
@@ -110,7 +151,11 @@ async function evaluateTxActions(
   serializedTx: string,
 ): Promise<{ tag: string; index: number; budget: Budget }[]> {
   const actions = await provider.evaluateTx(serializedTx);
-  return actions.map((a) => ({ tag: a.tag, index: a.index, budget: a.budget as Budget }));
+  return actions.map((a) => ({
+    tag: a.tag,
+    index: a.index,
+    budget: a.budget as Budget,
+  }));
 }
 
 function outRefKey(outRef: OutRef): string {
@@ -224,16 +269,49 @@ async function resolveCollateralSelection(
 
 /**
  * Compute the signer token name as the contracts define it:
- *   sha3_256( [output_index_byte] ++ tx_hash_bytes )
+ *   sha3_256( tx_hash_bytes ++ cbor.serialise(output_index) )
  */
 export function computeSignerTokenName(
   txHash: string,
   outputIndex: number,
 ): string {
-  const txHashBytes = Buffer.from(txHash, "hex");
-  const indexByte = Buffer.from([outputIndex & 0xff]);
-  const input = Buffer.concat([indexByte, txHashBytes]);
+  if (!Number.isInteger(outputIndex) || outputIndex < 0) {
+    throw new Error(
+      `output_index must be a non-negative integer: ${outputIndex}`,
+    );
+  }
+  const txHashBytes = hexToBytes(txHash);
+  const indexBytes = cborUInt(outputIndex);
+  const input = new Uint8Array(txHashBytes.length + indexBytes.length);
+  input.set(txHashBytes, 0);
+  input.set(indexBytes, txHashBytes.length);
   return sha3_256(input);
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0)
+    throw new Error(`invalid hex length: ${hex.length}`);
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function cborUInt(n: number): Uint8Array {
+  if (n < 24) return new Uint8Array([n]);
+  if (n < 0x100) return new Uint8Array([0x18, n]);
+  if (n < 0x10000) return new Uint8Array([0x19, (n >>> 8) & 0xff, n & 0xff]);
+  if (n < 0x100000000) {
+    return new Uint8Array([
+      0x1a,
+      (n >>> 24) & 0xff,
+      (n >>> 16) & 0xff,
+      (n >>> 8) & 0xff,
+      n & 0xff,
+    ]);
+  }
+  throw new Error(`output_index too large for CBOR uint32: ${n}`);
 }
 
 /**
@@ -256,8 +334,28 @@ function sortedInputs(
   return { sorted: [b, a], aIdx: 1, bIdx: 0 };
 }
 
+function outrefSortKey(o: { txHash: string; txIndex: number }): string {
+  return o.txHash + o.txIndex.toString().padStart(8, "0");
+}
+
 /**
- * Mint signer token setup. Requires EXACTLY 1 UTxO as input (≥ 6 ADA).
+ * Find the index of `target` in `refs` after lexicographic outref sort.
+ */
+function sortedRefIndex(
+  target: { txHash: string; txIndex: number },
+  refs: { txHash: string; txIndex: number }[],
+): number {
+  const sorted = [...refs].sort((x, y) =>
+    outrefSortKey(x).localeCompare(outrefSortKey(y)),
+  );
+  return sorted.findIndex(
+    (r) => r.txHash === target.txHash && r.txIndex === target.txIndex,
+  );
+}
+
+/**
+ * Mint signer token setup. Pass a wallet UTxO with ≥ 6 ADA as the
+ * `anchorUtxo`; its outref seeds the derived signer-token name.
  */
 export async function mintSignerToken(
   wallet: BrowserWallet,
@@ -308,9 +406,15 @@ export async function mintSignerToken(
   );
 
   const inputLovelace = getLovelace(params.anchorUtxo.amount);
-  const existingTokens = params.anchorUtxo.amount.filter((a) => a.unit !== "lovelace");
+  const existingTokens = params.anchorUtxo.amount.filter(
+    (a) => a.unit !== "lovelace",
+  );
 
-  const buildTx = (signerLovelace: bigint, feeOverride: string, mintBudget?: Budget) => {
+  const buildTx = (
+    signerLovelace: bigint,
+    feeOverride: string,
+    mintBudget?: Budget,
+  ) => {
     let t = getTxBuilder(provider, protocolParams)
       .changeAddress(changeAddress)
       .txIn(
@@ -323,7 +427,17 @@ export async function mintSignerToken(
       .mintPlutusScriptV3()
       .mint("2", policyId, tokenName);
 
-    t = attachMintingScriptSource(t, SIGNER_TOKEN_POLICY_REFERENCE, BigInt(protocolParamsIdx), mintBudget);
+    // SignerTokenPolicyRedeemer { protocol_parameters_ix, signer_input_ix, signer_metadata_output_ix }
+    const signerMintRedeemer = {
+      alternative: 0,
+      fields: [BigInt(protocolParamsIdx), 0n, 0n],
+    };
+    t = attachMintingScriptSource(
+      t,
+      SIGNER_TOKEN_POLICY_REFERENCE,
+      signerMintRedeemer,
+      mintBudget,
+    );
 
     t = t
       .txOut(params.signerMetadataAddress, [
@@ -348,25 +462,42 @@ export async function mintSignerToken(
   };
 
   // Phase 1: offline fee estimate
-  const feeEstBuilder = buildTx(inputLovelace - SIGNER_METADATA_LOVELACE, "0", DEFAULT_BUDGET);
+  const feeEstBuilder = buildTx(
+    inputLovelace - SIGNER_METADATA_LOVELACE,
+    "0",
+    DEFAULT_BUDGET,
+  );
   feeEstBuilder.completeSync();
-  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const generousFee = BigInt(
+    Math.ceil(Number(feeEstBuilder.calculateFee()) * 2),
+  );
   const signerLovelace = inputLovelace - SIGNER_METADATA_LOVELACE - generousFee;
 
   // Phase 2: evaluate to get real execution units
-  const evalSerialized = buildTx(signerLovelace, generousFee.toString(), DEFAULT_BUDGET).completeSync();
+  const evalSerialized = buildTx(
+    signerLovelace,
+    generousFee.toString(),
+    DEFAULT_BUDGET,
+  ).completeSync();
   const actions = await evaluateTxActions(provider, evalSerialized);
-  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+  const mintBudget = actions.find(
+    (a) => a.tag === "mint" && a.index === 0,
+  )?.budget;
 
   // Phase 3: final tx with real execution units → correct scriptIntegrityHash
-  const unsignedTx = buildTx(signerLovelace, generousFee.toString(), mintBudget).completeSync();
+  const unsignedTx = buildTx(
+    signerLovelace,
+    generousFee.toString(),
+    mintBudget,
+  ).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);
 }
 
 /**
- * Create a new attestation. The signer's UTxO must be the ONLY input.
+ * Create a new attestation. The signer's UTxO carries the signer token;
+ * extra wallet inputs and change outputs are allowed.
  */
 export async function createAttestation(
   wallet: BrowserWallet,
@@ -399,7 +530,23 @@ export async function createAttestation(
   ]);
 
   const sigPolicyId = params.protocolDatum.signature_token_policy;
-  const mintRedeemer = { alternative: 0, fields: [0n, -1n] };
+
+  // Reference inputs are sorted lex by outref. Compute the index of the
+  // protocol-parameters ref among them so the contract reads the right datum.
+  const { aIdx: protocolParamsIdx } = sortedInputs(
+    { txHash: PROTOCOL_PARAMS_TX_HASH, txIndex: PROTOCOL_PARAMS_TX_IX },
+    {
+      txHash: SIGNATURE_TOKEN_POLICY_REFERENCE.txHash,
+      txIndex: SIGNATURE_TOKEN_POLICY_REFERENCE.txIx,
+    },
+  );
+
+  // MintSignatureToken { protocol_parameters_ix, signer_input_ix, attestation_output_ix, is_new_attestation }
+  // True (Bool) is encoded as Constr 1 [].
+  const mintRedeemer = {
+    alternative: 0,
+    fields: [BigInt(protocolParamsIdx), 0n, 0n, { alternative: 1, fields: [] }],
+  };
 
   const datum = attestationDatum(
     params.signerTokenName,
@@ -447,9 +594,15 @@ export async function createAttestation(
     );
   }
 
-  const existingTokens = params.signerUtxo.amount.filter((a) => a.unit !== "lovelace");
+  const existingTokens = params.signerUtxo.amount.filter(
+    (a) => a.unit !== "lovelace",
+  );
 
-  const buildTx = (signerLovelace: bigint, feeOverride: string, mintBudget?: Budget) => {
+  const buildTx = (
+    signerLovelace: bigint,
+    feeOverride: string,
+    mintBudget?: Budget,
+  ) => {
     let t = getTxBuilder(provider, protocolParams)
       .changeAddress(changeAddress)
       .txIn(
@@ -462,7 +615,12 @@ export async function createAttestation(
       .mintPlutusScriptV3()
       .mint("1", sigPolicyId, params.signerTokenName);
 
-    t = attachMintingScriptSource(t, SIGNATURE_TOKEN_POLICY_REFERENCE, mintRedeemer, mintBudget);
+    t = attachMintingScriptSource(
+      t,
+      SIGNATURE_TOKEN_POLICY_REFERENCE,
+      mintRedeemer,
+      mintBudget,
+    );
 
     t = t
       .txOut(params.attestationValidatorAddress, [
@@ -492,18 +650,34 @@ export async function createAttestation(
   };
 
   // Phase 1: offline fee estimate
-  const feeEstBuilder = buildTx(inputLovelace - attestationLovelace, "0", DEFAULT_BUDGET);
+  const feeEstBuilder = buildTx(
+    inputLovelace - attestationLovelace,
+    "0",
+    DEFAULT_BUDGET,
+  );
   feeEstBuilder.completeSync();
-  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const generousFee = BigInt(
+    Math.ceil(Number(feeEstBuilder.calculateFee()) * 2),
+  );
   const signerLovelace = inputLovelace - attestationLovelace - generousFee;
 
   // Phase 2: evaluate for real execution units
-  const evalSerialized = buildTx(signerLovelace, generousFee.toString(), DEFAULT_BUDGET).completeSync();
+  const evalSerialized = buildTx(
+    signerLovelace,
+    generousFee.toString(),
+    DEFAULT_BUDGET,
+  ).completeSync();
   const actions = await evaluateTxActions(provider, evalSerialized);
-  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+  const mintBudget = actions.find(
+    (a) => a.tag === "mint" && a.index === 0,
+  )?.budget;
 
   // Phase 3: final tx with correct scriptIntegrityHash
-  const unsignedTx = buildTx(signerLovelace, generousFee.toString(), mintBudget).completeSync();
+  const unsignedTx = buildTx(
+    signerLovelace,
+    generousFee.toString(),
+    mintBudget,
+  ).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);
@@ -532,10 +706,14 @@ export async function signAttestation(
     fetchProtocolParams(provider),
   ]);
   const sigPolicyId = params.protocolDatum.signature_token_policy;
+  const mainConstituent =
+    params.attestationUtxo.constituents.find(
+      (c) => c.originalAuthor === params.attestationUtxo.datum.original_author,
+    ) ?? params.attestationUtxo.constituents[0];
 
   const attIn = {
-    txHash: params.attestationUtxo.txHash,
-    txIndex: params.attestationUtxo.txIx,
+    txHash: mainConstituent.txHash,
+    txIndex: mainConstituent.txIx,
   };
   const sigIn = {
     txHash: params.signerUtxo.txHash,
@@ -547,23 +725,51 @@ export async function signAttestation(
     sigIn,
   ]);
 
+  // Reference inputs are sorted lex by outref. Three refs are attached here:
+  // protocol params, attestation validator, signature token policy.
+  const protocolParamsIdx = sortedRefIndex(
+    { txHash: PROTOCOL_PARAMS_TX_HASH, txIndex: PROTOCOL_PARAMS_TX_IX },
+    [
+      { txHash: PROTOCOL_PARAMS_TX_HASH, txIndex: PROTOCOL_PARAMS_TX_IX },
+      {
+        txHash: ATTESTATION_VALIDATOR_REFERENCE.txHash,
+        txIndex: ATTESTATION_VALIDATOR_REFERENCE.txIx,
+      },
+      {
+        txHash: SIGNATURE_TOKEN_POLICY_REFERENCE.txHash,
+        txIndex: SIGNATURE_TOKEN_POLICY_REFERENCE.txIx,
+      },
+    ],
+  );
+
+  // Sign { protocol_parameters_ix, signer_input_ix, attestation_input_ix, attestation_output_ix }
   const attRedeemer = {
     alternative: 0,
-    fields: [0n, BigInt(signerIdx), BigInt(attIdx)],
+    fields: [BigInt(protocolParamsIdx), BigInt(signerIdx), BigInt(attIdx), 0n],
   };
-  const mintRedeemer = { alternative: 0, fields: [0n, BigInt(signerIdx)] };
+  // MintSignatureToken { protocol_parameters_ix, signer_input_ix, attestation_output_ix, is_new_attestation }
+  // False (Bool) is encoded as Constr 0 [].
+  const mintRedeemer = {
+    alternative: 0,
+    fields: [
+      BigInt(protocolParamsIdx),
+      BigInt(signerIdx),
+      0n,
+      { alternative: 0, fields: [] },
+    ],
+  };
 
   const updatedAssets = [
-    { unit: "lovelace", quantity: params.attestationUtxo.lovelace },
-    ...params.attestationUtxo.signers.map((s) => ({
+    { unit: "lovelace", quantity: mainConstituent.lovelace },
+    ...mainConstituent.signers.map((s) => ({
       unit: s.policyId + s.tokenName,
       quantity: s.quantity,
     })),
     { unit: sigPolicyId + params.signerTokenName, quantity: "1" },
   ];
   const attestationInputAssets = [
-    { unit: "lovelace", quantity: params.attestationUtxo.lovelace },
-    ...params.attestationUtxo.signers.map((s) => ({
+    { unit: "lovelace", quantity: mainConstituent.lovelace },
+    ...mainConstituent.signers.map((s) => ({
       unit: s.policyId + s.tokenName,
       quantity: s.quantity,
     })),
@@ -582,9 +788,16 @@ export async function signAttestation(
   );
 
   const signerInputLovelace = getLovelace(params.signerUtxo.amount);
-  const existingSignerTokens = params.signerUtxo.amount.filter((a) => a.unit !== "lovelace");
+  const existingSignerTokens = params.signerUtxo.amount.filter(
+    (a) => a.unit !== "lovelace",
+  );
 
-  const buildTx = (signerLovelace: bigint, feeOverride: string, spendBudget?: Budget, mintBudget?: Budget) => {
+  const buildTx = (
+    signerLovelace: bigint,
+    feeOverride: string,
+    spendBudget?: Budget,
+    mintBudget?: Budget,
+  ) => {
     let t = getTxBuilder(provider, protocolParams)
       .changeAddress(changeAddress)
       .readOnlyTxInReference(PROTOCOL_PARAMS_TX_HASH, PROTOCOL_PARAMS_TX_IX);
@@ -592,17 +805,33 @@ export async function signAttestation(
     for (const inp of sorted) {
       if (inp.txHash === attIn.txHash && inp.txIndex === attIn.txIndex) {
         t = attachSpendingScriptSource(
-          t, inp, ATTESTATION_VALIDATOR_REFERENCE, attRedeemer,
-          { amount: attestationInputAssets, address: params.attestationValidatorAddress },
+          t,
+          inp,
+          ATTESTATION_VALIDATOR_REFERENCE,
+          attRedeemer,
+          {
+            amount: attestationInputAssets,
+            address: params.attestationValidatorAddress,
+          },
           spendBudget,
         );
       } else {
-        t = t.txIn(inp.txHash, inp.txIndex, params.signerUtxo.amount, changeAddress);
+        t = t.txIn(
+          inp.txHash,
+          inp.txIndex,
+          params.signerUtxo.amount,
+          changeAddress,
+        );
       }
     }
 
     t = t.mintPlutusScriptV3().mint("1", sigPolicyId, params.signerTokenName);
-    t = attachMintingScriptSource(t, SIGNATURE_TOKEN_POLICY_REFERENCE, mintRedeemer, mintBudget);
+    t = attachMintingScriptSource(
+      t,
+      SIGNATURE_TOKEN_POLICY_REFERENCE,
+      mintRedeemer,
+      mintBudget,
+    );
 
     t = t
       .txOut(params.attestationValidatorAddress, updatedAssets)
@@ -623,19 +852,40 @@ export async function signAttestation(
   };
 
   // Phase 1: offline fee estimate
-  const feeEstBuilder = buildTx(signerInputLovelace, "0", DEFAULT_BUDGET, DEFAULT_BUDGET);
+  const feeEstBuilder = buildTx(
+    signerInputLovelace,
+    "0",
+    DEFAULT_BUDGET,
+    DEFAULT_BUDGET,
+  );
   feeEstBuilder.completeSync();
-  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const generousFee = BigInt(
+    Math.ceil(Number(feeEstBuilder.calculateFee()) * 2),
+  );
   const signerLovelace = signerInputLovelace - generousFee;
 
   // Phase 2: evaluate for real execution units
-  const evalSerialized = buildTx(signerLovelace, generousFee.toString(), DEFAULT_BUDGET, DEFAULT_BUDGET).completeSync();
+  const evalSerialized = buildTx(
+    signerLovelace,
+    generousFee.toString(),
+    DEFAULT_BUDGET,
+    DEFAULT_BUDGET,
+  ).completeSync();
   const actions = await evaluateTxActions(provider, evalSerialized);
-  const spendBudget = actions.find((a) => a.tag === "spend" && a.index === attIdx)?.budget;
-  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+  const spendBudget = actions.find(
+    (a) => a.tag === "spend" && a.index === attIdx,
+  )?.budget;
+  const mintBudget = actions.find(
+    (a) => a.tag === "mint" && a.index === 0,
+  )?.budget;
 
   // Phase 3: final tx with correct scriptIntegrityHash
-  const unsignedTx = buildTx(signerLovelace, generousFee.toString(), spendBudget, mintBudget).completeSync();
+  const unsignedTx = buildTx(
+    signerLovelace,
+    generousFee.toString(),
+    spendBudget,
+    mintBudget,
+  ).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);
@@ -666,9 +916,14 @@ export async function retireAttestation(
 
   const sigPolicyId = params.protocolDatum.signature_token_policy;
 
+  const mainConstituent =
+    params.attestationUtxo.constituents.find(
+      (c) => c.originalAuthor === params.attestationUtxo.datum.original_author,
+    ) ?? params.attestationUtxo.constituents[0];
+
   const attIn = {
-    txHash: params.attestationUtxo.txHash,
-    txIndex: params.attestationUtxo.txIx,
+    txHash: mainConstituent.txHash,
+    txIndex: mainConstituent.txIx,
   };
   const sigIn = {
     txHash: params.signerUtxo.txHash,
@@ -686,17 +941,24 @@ export async function retireAttestation(
   };
   const burnRedeemer = { alternative: 1, fields: [] };
   const attestationInputAssets = [
-    { unit: "lovelace", quantity: params.attestationUtxo.lovelace },
-    ...params.attestationUtxo.signers.map((s) => ({
+    { unit: "lovelace", quantity: mainConstituent.lovelace },
+    ...mainConstituent.signers.map((s) => ({
       unit: s.policyId + s.tokenName,
       quantity: s.quantity,
     })),
   ];
   const totalInputLovelace =
-    getLovelace(params.signerUtxo.amount) + BigInt(params.attestationUtxo.lovelace);
-  const existingSignerTokens = params.signerUtxo.amount.filter((a) => a.unit !== "lovelace");
+    getLovelace(params.signerUtxo.amount) + BigInt(mainConstituent.lovelace);
+  const existingSignerTokens = params.signerUtxo.amount.filter(
+    (a) => a.unit !== "lovelace",
+  );
 
-  const buildTx = (walletLovelace: bigint, feeOverride: string, spendBudget?: Budget, mintBudget?: Budget) => {
+  const buildTx = (
+    walletLovelace: bigint,
+    feeOverride: string,
+    spendBudget?: Budget,
+    mintBudget?: Budget,
+  ) => {
     let t = getTxBuilder(provider, protocolParams)
       .changeAddress(changeAddress)
       .readOnlyTxInReference(PROTOCOL_PARAMS_TX_HASH, PROTOCOL_PARAMS_TX_IX);
@@ -704,18 +966,34 @@ export async function retireAttestation(
     for (const inp of sorted) {
       if (inp.txHash === attIn.txHash && inp.txIndex === attIn.txIndex) {
         t = attachSpendingScriptSource(
-          t, inp, ATTESTATION_VALIDATOR_REFERENCE, attRedeemer,
-          { amount: attestationInputAssets, address: params.attestationValidatorAddress },
+          t,
+          inp,
+          ATTESTATION_VALIDATOR_REFERENCE,
+          attRedeemer,
+          {
+            amount: attestationInputAssets,
+            address: params.attestationValidatorAddress,
+          },
           spendBudget,
         );
       } else {
-        t = t.txIn(inp.txHash, inp.txIndex, params.signerUtxo.amount, changeAddress);
+        t = t.txIn(
+          inp.txHash,
+          inp.txIndex,
+          params.signerUtxo.amount,
+          changeAddress,
+        );
       }
     }
 
     for (const sig of params.attestationUtxo.signers) {
       t = t.mintPlutusScriptV3().mint("-1", sigPolicyId, sig.tokenName);
-      t = attachMintingScriptSource(t, SIGNATURE_TOKEN_POLICY_REFERENCE, burnRedeemer, mintBudget);
+      t = attachMintingScriptSource(
+        t,
+        SIGNATURE_TOKEN_POLICY_REFERENCE,
+        burnRedeemer,
+        mintBudget,
+      );
     }
 
     t = t
@@ -735,19 +1013,40 @@ export async function retireAttestation(
   };
 
   // Phase 1: offline fee estimate
-  const feeEstBuilder = buildTx(totalInputLovelace, "0", DEFAULT_BUDGET, DEFAULT_BUDGET);
+  const feeEstBuilder = buildTx(
+    totalInputLovelace,
+    "0",
+    DEFAULT_BUDGET,
+    DEFAULT_BUDGET,
+  );
   feeEstBuilder.completeSync();
-  const generousFee = BigInt(Math.ceil(Number(feeEstBuilder.calculateFee()) * 2));
+  const generousFee = BigInt(
+    Math.ceil(Number(feeEstBuilder.calculateFee()) * 2),
+  );
   const walletLovelace = totalInputLovelace - generousFee;
 
   // Phase 2: evaluate for real execution units
-  const evalSerialized = buildTx(walletLovelace, generousFee.toString(), DEFAULT_BUDGET, DEFAULT_BUDGET).completeSync();
+  const evalSerialized = buildTx(
+    walletLovelace,
+    generousFee.toString(),
+    DEFAULT_BUDGET,
+    DEFAULT_BUDGET,
+  ).completeSync();
   const actions = await evaluateTxActions(provider, evalSerialized);
-  const spendBudget = actions.find((a) => a.tag === "spend" && a.index === attIdx)?.budget;
-  const mintBudget = actions.find((a) => a.tag === "mint" && a.index === 0)?.budget;
+  const spendBudget = actions.find(
+    (a) => a.tag === "spend" && a.index === attIdx,
+  )?.budget;
+  const mintBudget = actions.find(
+    (a) => a.tag === "mint" && a.index === 0,
+  )?.budget;
 
   // Phase 3: final tx with correct scriptIntegrityHash
-  const unsignedTx = buildTx(walletLovelace, generousFee.toString(), spendBudget, mintBudget).completeSync();
+  const unsignedTx = buildTx(
+    walletLovelace,
+    generousFee.toString(),
+    spendBudget,
+    mintBudget,
+  ).completeSync();
 
   const signedTx = await wallet.signTx(unsignedTx);
   return wallet.submitTx(signedTx);

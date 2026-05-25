@@ -1,8 +1,9 @@
+use aiken/cbor.{serialise}
 use aiken/collection/dict
 use aiken/collection/list
 use aiken/crypto.{sha3_256}
 use aiken/primitive/bytearray
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets.{PolicyId, quantity_of, tokens}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
@@ -10,6 +11,14 @@ use cardano/transaction.{
 use config.{protocol_parameters_script_hash}
 use consts.{protocol_parameters_token}
 use types.{ProtocolParametersDatum, SignerMetadataDatum}
+
+/// The redeemer for the signer token minting policy. Indices let the
+/// builder use multiple wallet UTxOs and emit additional change outputs.
+pub type SignerTokenPolicyRedeemer {
+  protocol_parameters_ix: Int,
+  signer_input_ix: Int,
+  signer_metadata_output_ix: Int,
+}
 
 /// Check that the signer metadata is correct. (Currently only
 /// the `nick_name` field is mandatory, all others are optional.)
@@ -25,14 +34,23 @@ pub fn is_signer_metadatum_correct(datum: SignerMetadataDatum) -> Bool {
 ///   - updating the signer metadata
 ///   - minting his own signature tokens for attestation
 validator signer_token_policy {
-  mint(redeemer: Int, my_policy_id: PolicyId, tx: Transaction) {
+  mint(
+    redeemer: SignerTokenPolicyRedeemer,
+    my_policy_id: PolicyId,
+    tx: Transaction,
+  ) {
+    let SignerTokenPolicyRedeemer {
+      protocol_parameters_ix,
+      signer_input_ix,
+      signer_metadata_output_ix,
+    } = redeemer
     let Transaction { inputs, reference_inputs, mint, outputs, .. } = tx
 
-    expect [signer_input] = inputs
+    expect Some(signer_input) = list.at(inputs, signer_input_ix)
     let OutputReference { transaction_id, output_index } =
       signer_input.output_reference
     let signer_token_name =
-      sha3_256(bytearray.push(transaction_id, output_index))
+      sha3_256(bytearray.concat(transaction_id, serialise(output_index)))
 
     expect Some(Input {
       output: Output {
@@ -41,7 +59,7 @@ validator signer_token_policy {
         ..
       },
       ..
-    }) = list.at(reference_inputs, redeemer)
+    }) = list.at(reference_inputs, protocol_parameters_ix)
     expect InlineDatum(protocol_parameters_data) = protocol_parameters_datum
     expect ProtocolParametersDatum {
       signer_token_policy,
@@ -51,7 +69,8 @@ validator signer_token_policy {
 
     let mint_tokens = tokens(mint, my_policy_id)
 
-    expect [signer_metadata_output, _signer_output] = outputs
+    expect Some(signer_metadata_output) =
+      list.at(outputs, signer_metadata_output_ix)
     let Output {
       address: Address { payment_credential: signer_metadata_address, .. },
       datum: signer_metadata_datum,
@@ -87,7 +106,26 @@ validator signer_token_policy {
     // 6. Signer metadata datum is correct.
     let signer_metadatum_correct = is_signer_metadatum_correct(signer_metadatum)
 
-    protocol_token_correct? && signer_token_policy_correct? && mint_correct? && signer_metadata_address_correct? && signer_metadata_value_correct? && signer_metadatum_correct?
+    // 7. The second minted signer token must end up at a wallet
+    //    (VerificationKey) address. If it landed at a script address it
+    //    would be unusable — the spend validators (attestation_validator.Sign,
+    //    attestation_validator.Retire, signer_metadata_validator.Update,
+    //    signature_token_policy.MintSignatureToken) all require the signer
+    //    input to come from a VerificationKey address, so a script-locked
+    //    second token would permanently brick the signer's identity.
+    let second_token_at_wallet =
+      list.any(
+        outputs,
+        fn(o) {
+          when o.address.payment_credential is {
+            VerificationKey(_) ->
+              quantity_of(o.value, my_policy_id, signer_token_name) >= 1
+            _ -> False
+          }
+        },
+      )
+
+    protocol_token_correct? && signer_token_policy_correct? && mint_correct? && signer_metadata_address_correct? && signer_metadata_value_correct? && signer_metadatum_correct? && second_token_at_wallet?
   }
 
   else(_) {

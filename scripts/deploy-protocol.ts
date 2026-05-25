@@ -35,6 +35,11 @@ import {
   type Protocol,
   type UTxO,
 } from "@meshsdk/core";
+import {
+  DEFAULT_V1_COST_MODEL_LIST,
+  DEFAULT_V2_COST_MODEL_LIST,
+  DEFAULT_V3_COST_MODEL_LIST,
+} from "@meshsdk/common";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
@@ -335,6 +340,43 @@ function resolveDefaultBlueprintPath(
 
 function createProvider(apiKey: string): BlockfrostProvider {
   return new BlockfrostProvider(apiKey);
+}
+
+function blockfrostHost(network: NetworkName): string {
+  return network === "mainnet"
+    ? "https://cardano-mainnet.blockfrost.io/api/v0"
+    : "https://cardano-preprod.blockfrost.io/api/v0";
+}
+
+async function syncMeshCostModels(
+  network: NetworkName,
+  apiKey: string,
+): Promise<void> {
+  const res = await fetch(
+    `${blockfrostHost(network)}/epochs/latest/parameters`,
+    { headers: { project_id: apiKey } },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Failed to fetch protocol parameters from Blockfrost: ${res.status} ${res.statusText}`,
+    );
+  }
+  const params = (await res.json()) as {
+    cost_models?: Record<string, Record<string, number> | number[] | null>;
+  };
+  const cm = params.cost_models ?? {};
+  const targets: Array<[string, number[]]> = [
+    ["PlutusV1", DEFAULT_V1_COST_MODEL_LIST],
+    ["PlutusV2", DEFAULT_V2_COST_MODEL_LIST],
+    ["PlutusV3", DEFAULT_V3_COST_MODEL_LIST],
+  ];
+  for (const [lang, target] of targets) {
+    const live = cm[lang];
+    if (!live) continue;
+    const values = Array.isArray(live) ? live : Object.values(live);
+    target.length = 0;
+    for (const v of values) target.push(Number(v));
+  }
 }
 
 function createWallet(
@@ -1345,6 +1387,7 @@ function sleep(ms: number): Promise<void> {
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const provider = createProvider(options.blockfrostApiKey);
+  await syncMeshCostModels(options.network, options.blockfrostApiKey);
   const wallet = createWallet(provider, options.deployerSeed, options.network);
   const deployerAddress = await wallet.getChangeAddress();
   const configuredAnchor =

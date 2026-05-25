@@ -3,7 +3,7 @@
 use aiken/collection/dict
 use aiken/fuzz
 use aiken/interval.{Interval, IntervalBound, NegativeInfinity, PositiveInfinity}
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets.{Value}
 use cardano/transaction.{
   InlineDatum, Input, NoDatum, Output, OutputReference, Transaction,
@@ -27,6 +27,11 @@ const mock_signer_policy: ByteArray =
 
 const mock_attestation_validator: ByteArray =
   #"a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+
+// The signer's wallet payment-key hash — distinct from any script hash
+// because the signer input must come from a wallet, not a script UTxO.
+const mock_signer_wallet: ByteArray =
+  #"e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
 
 const mock_signer_name: ByteArray = #"cafe"
 
@@ -113,8 +118,8 @@ fn pp_ref_input() -> Input {
 }
 
 // Signer's input for new-attestation (signer_input_ix_option = -1).
-// Must carry exactly one signer token and must NOT be at the
-// attestation_validator address.
+// Must carry exactly one signer token and must come from the signer's
+// wallet (a VerificationKey address), not from any script UTxO.
 fn signer_input() -> Input {
   Input {
     output_reference: OutputReference {
@@ -123,7 +128,7 @@ fn signer_input() -> Input {
     },
     output: Output {
       address: Address {
-        payment_credential: Script(mock_signer_policy),
+        payment_credential: VerificationKey(mock_signer_wallet),
         stake_credential: None,
       },
       value: assets.from_lovelace(2_000_000)
@@ -193,14 +198,20 @@ test mint_new_attestation_happy_path() {
       assets.from_asset(mock_sig_policy, mock_signer_name, 1),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: -1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
     mock_sig_policy,
     tx,
   )
 }
 
-test mint_new_attestation_fails_two_inputs() fail {
-  // expect [signer_input] = inputs fails with two inputs.
+test mint_new_attestation_succeeds_with_extra_inputs() {
+  // Wallets with fragmented UTxOs may add extra inputs for fees/min-Ada.
+  // The validator must accept that as long as signer_input_ix is correct.
   let extra_input =
     Input {
       output_reference: OutputReference {
@@ -219,13 +230,84 @@ test mint_new_attestation_fails_two_inputs() fail {
     }
   let tx =
     build_tx(
-      [signer_input(), extra_input],
+      [extra_input, signer_input()],
       [pp_ref_input()],
       [attestation_output(), signer_change_output()],
       assets.from_asset(mock_sig_policy, mock_signer_name, 1),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: -1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 1,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
+    mock_sig_policy,
+    tx,
+  )
+}
+
+test mint_signature_fails_when_signer_input_is_attestation_utxo() fail {
+  // Sanity: someone trying to derive the signer token name from a UTxO
+  // locked at the attestation_validator address must be rejected.
+  let tx =
+    build_tx(
+      [attest_input_unsigned(), signer_input()],
+      [pp_ref_input()],
+      [attestation_output(), signer_change_output()],
+      assets.from_asset(mock_sig_policy, mock_signer_name, 1),
+    )
+  signature_token_policy.signature_token_policy.mint(
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: False,
+    },
+    mock_sig_policy,
+    tx,
+  )
+}
+
+test mint_signature_fails_when_signer_input_at_script_address() fail {
+  // The signer input must be a wallet (VerificationKey) UTxO. The
+  // restriction is general — any script address must be rejected, not
+  // just the attestation_validator. Here we point signer_input_ix at a
+  // UTxO locked at the signer_metadata_validator that happens to hold
+  // the signer token.
+  let script_locked_signer =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: mock_tx_id,
+        output_index: 0,
+      },
+      output: Output {
+        address: Address {
+          payment_credential: Script(
+            #"d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4",
+          ),
+          stake_credential: None,
+        },
+        value: assets.from_lovelace(2_000_000)
+          |> assets.add(mock_signer_policy, mock_signer_name, 1),
+        datum: NoDatum,
+        reference_script: None,
+      },
+    }
+  let tx =
+    build_tx(
+      [script_locked_signer],
+      [pp_ref_input()],
+      [attestation_output(), signer_change_output()],
+      assets.from_asset(mock_sig_policy, mock_signer_name, 1),
+    )
+  signature_token_policy.signature_token_policy.mint(
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
     mock_sig_policy,
     tx,
   )
@@ -272,7 +354,12 @@ test mint_new_attestation_fails_wrong_sig_policy_in_pp() fail {
       assets.from_asset(mock_sig_policy, mock_signer_name, 1),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: -1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
     mock_sig_policy,
     tx,
   )
@@ -288,7 +375,12 @@ test mint_new_attestation_fails_wrong_token_quantity() fail {
       assets.from_asset(mock_sig_policy, mock_signer_name, 2),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: -1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
     mock_sig_policy,
     tx,
   )
@@ -316,7 +408,12 @@ test mint_new_attestation_fails_wrong_attestation_address() fail {
       assets.from_asset(mock_sig_policy, mock_signer_name, 1),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: -1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
     mock_sig_policy,
     tx,
   )
@@ -354,7 +451,12 @@ test mint_new_attestation_fails_bad_datum() fail {
       assets.from_asset(mock_sig_policy, mock_signer_name, 1),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: -1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
     mock_sig_policy,
     tx,
   )
@@ -364,6 +466,8 @@ test mint_new_attestation_fails_bad_datum() fail {
 
 test mint_additional_signature_happy_path() {
   // signer_input_ix_option = 1: signer is inputs[1], datum check skipped.
+  // attest_input_unsigned (at the attestation_validator address) satisfies
+  // the "existing attestation is being spent" requirement.
   let tx =
     build_tx(
       [attest_input_unsigned(), signer_input()],
@@ -372,7 +476,38 @@ test mint_additional_signature_happy_path() {
       assets.from_asset(mock_sig_policy, mock_signer_name, 1),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: 1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 1,
+      attestation_output_ix: 0,
+      is_new_attestation: False,
+    },
+    mock_sig_policy,
+    tx,
+  )
+}
+
+test mint_additional_signature_fails_without_attestation_input() fail {
+  // is_new_attestation: False is reserved for the "additional signer joins
+  // an existing attestation" flow, where attestation_validator.Sign enforces
+  // datum invariance. Without an attestation input being spent, the mint
+  // policy would otherwise let any registered signer create a fresh
+  // attestation UTxO with an arbitrary datum (e.g. impersonating another
+  // original_author or skipping the description/source_code checks).
+  let tx =
+    build_tx(
+      [signer_input()],
+      [pp_ref_input()],
+      [attestation_output(), signer_change_output()],
+      assets.from_asset(mock_sig_policy, mock_signer_name, 1),
+    )
+  signature_token_policy.signature_token_policy.mint(
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: False,
+    },
     mock_sig_policy,
     tx,
   )
@@ -417,7 +552,12 @@ test prop_mint_new_attestation_any_valid_datum(
       assets.from_asset(mock_sig_policy, mock_signer_name, 1),
     )
   signature_token_policy.signature_token_policy.mint(
-    MintSignatureToken { protocol_parameters_ix: 0, signer_input_ix_option: -1 },
+    MintSignatureToken {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      attestation_output_ix: 0,
+      is_new_attestation: True,
+    },
     mock_sig_policy,
     tx,
   )

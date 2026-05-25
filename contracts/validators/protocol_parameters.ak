@@ -86,14 +86,21 @@ validator protocol_parameters {
         let protocol_value_correct =
           quantity_of(protocol_value, policy_id, protocol_parameters_token) == 1
 
-        // 4. The form of the ProtocolParameters datum is correct.
+        // 4. The admin token must NOT be co-located with the PP UTxO.
+        //    If it were, the PP UTxO's own value would satisfy Update's
+        //    admin_token_spent check, letting anyone hijack the protocol
+        //    by spending the PP UTxO and pointing deployer_ix at itself.
+        let admin_token_not_in_pp =
+          quantity_of(protocol_value, policy_id, admin_token) == 0
+
+        // 5. The form of the ProtocolParameters datum is correct.
         expect InlineDatum(protocol_data) = protocol_datum
         expect ProtocolParametersDatum { .. } = protocol_data
 
-        // 5. Protocol reference script is correct.
+        // 6. Protocol reference script is correct.
         let script_correct = protocol_script == Some(policy_id)
 
-        anchor_ref_spent? && mint_correct? && protocol_address_correct? && protocol_value_correct? && script_correct?
+        anchor_ref_spent? && mint_correct? && protocol_address_correct? && protocol_value_correct? && admin_token_not_in_pp? && script_correct?
       }
 
       MintRetireProtocol -> {
@@ -149,14 +156,21 @@ validator protocol_parameters {
         let protocol_value_correct =
           quantity_of(protocol_value, my_hash, protocol_parameters_token) == 1
 
-        // 3. The form of the ProtocolParameters datum is correct.
+        // 3. The admin token must NOT be co-located with the PP UTxO.
+        //    Same reason as in Mint: a self-referential deployer_ix on a
+        //    PP UTxO that holds the admin token would let anyone hijack
+        //    the protocol on the next Update.
+        let admin_token_not_in_pp =
+          quantity_of(protocol_value, my_hash, admin_token) == 0
+
+        // 4. The form of the ProtocolParameters datum is correct.
         expect InlineDatum(protocol_data) = protocol_datum
         expect ProtocolParametersDatum { .. } = protocol_data
 
-        // 4. Protocol reference script is correct.
+        // 5. Protocol reference script is correct.
         let script_correct = protocol_script == Some(my_hash)
 
-        spend_correct? && admin_token_spent? && protocol_address_correct? && protocol_value_correct? && script_correct?
+        spend_correct? && admin_token_spent? && protocol_address_correct? && protocol_value_correct? && admin_token_not_in_pp? && script_correct?
       }
 
       RetireScript { deployer_ix, protocol_ix } -> {
@@ -181,7 +195,7 @@ validator protocol_parameters {
 
         // 2. Protocol input does not have the ProtocolParamaters token.
         let protocol_value_correct =
-          quantity_of(protocol_value, my_hash, protocol_parameters_token) == 1
+          quantity_of(protocol_value, my_hash, protocol_parameters_token) == 0
 
         spend_correct? && admin_token_spent? && protocol_value_correct?
       }

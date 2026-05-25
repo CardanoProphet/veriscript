@@ -1,0 +1,11 @@
+Timestamp,How would you rate your overall experience on a scale of 1 (lowest) to 10 (highest)? ,"Did you encounter any bugs? If so, please describe them in detail. "
+25.4.2026 13:47:37,9,"When I try to connect my wallet after a period of inactivity, it gets stuck in an infinite loading state, requiring a page reload. After reloading, the wallet connects immediately."
+28.4.2026 11:04:23,10,buttons do not change cursor when hovering
+28.4.2026 12:33:26,10,
+29.4.2026 11:39:01,8,"When minting a signer token and the transaction is submitted, the hash is cut off in the message. Link to an explorer would be better there."
+4.5.2026 12:58:44,10,Several validators require exactly one input: wallets with fragmented UTxOs cannot satisfy this easily.
+9.5.2026 18:32:19,10,No
+10.5.2026 21:36:40,10,"Not really an issue, but there are different fonts in the text fields"
+14.5.2026 20:32:35,7,had an issue with infinite spinning wheel at first
+16.5.2026 21:22:54,10,none
+17.5.2026 14:55:00,3,I get cost model error when minting the signer token

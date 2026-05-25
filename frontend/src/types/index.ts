@@ -36,6 +36,7 @@ export interface AttestationConstituent {
   referenceScriptHash: string | null;
   originalAuthor: string;
   signers: SignatureToken[];
+  isCounterAttestation: boolean;
 }
 
 export interface AttestationUtxo {
@@ -44,6 +45,7 @@ export interface AttestationUtxo {
   datum: AttestationDatum;
   signers: SignatureToken[];
   signerCount: number;
+  counterSigners: SignatureToken[];
   counterSignerCount: number;
   lovelace: string;
   referenceScriptHash: string | null;
@@ -102,4 +104,5 @@ export interface Toast {
   id: string;
   type: "success" | "error" | "info";
   message: string;
+  txHash?: string;
 }

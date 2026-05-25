@@ -48,6 +48,7 @@ function utxoToAttestation(
     datum,
     signers,
     signerCount: signers.length,
+    counterSigners: [],
     counterSignerCount: 0,
     lovelace,
     referenceScriptHash,
@@ -59,6 +60,7 @@ function utxoToAttestation(
         referenceScriptHash,
         originalAuthor: datum.original_author,
         signers,
+        isCounterAttestation: datum.counter_attestation,
       },
     ],
   };
@@ -99,7 +101,7 @@ function mergeAttestations(
     const seenTokenNames = new Set<string>();
     const mergedSigners: SignatureToken[] = [];
     const seenCounterTokenNames = new Set<string>();
-    let counterSignerCount = 0;
+    const mergedCounterSigners: SignatureToken[] = [];
     const constituents: AttestationConstituent[] = [];
 
     for (const att of group) {
@@ -110,7 +112,7 @@ function mergeAttestations(
         for (const signer of att.signers) {
           if (!seenCounterTokenNames.has(signer.tokenName)) {
             seenCounterTokenNames.add(signer.tokenName);
-            counterSignerCount++;
+            mergedCounterSigners.push(signer);
           }
         }
       } else {
@@ -130,7 +132,8 @@ function mergeAttestations(
       ...representative,
       signers: mergedSigners,
       signerCount: mergedSigners.length,
-      counterSignerCount,
+      counterSigners: mergedCounterSigners,
+      counterSignerCount: mergedCounterSigners.length,
       referenceScriptHash,
       constituents,
     };

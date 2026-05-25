@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { BrowserWallet } from "@meshsdk/core";
 import { Modal, SubmitButton } from "./Modal";
-import { createAttestation } from "../../services/transactions";
+import { createAttestation, signAttestation } from "../../services/transactions";
 import type { AttestationUtxo, ProtocolParametersDatum, SignerUtxoInfo } from "../../types";
 import { explorerTx } from "../../config";
 import { useSignerUtxos } from "../../hooks/useSignerUtxos";
@@ -35,29 +35,64 @@ export function SignCounterAttestationModal({
     if (signerUtxos.length === 1) setSelectedSigner(signerUtxos[0]);
   }, [signerUtxos]);
 
+  // Check if already counter-attested by this signer
+  const alreadyCountered = selectedSigner
+    ? attestation.counterSigners.some((s) => s.tokenName === selectedSigner.tokenName)
+    : false;
+
   async function handleSubmit() {
     if (!selectedSigner) { onError("No signer token selected"); return; }
+    if (alreadyCountered) { onError("You have already counter-attested this attestation"); return; }
 
     setLoading(true);
     try {
       const { datum } = attestation;
-      const txHash = await createAttestation(wallet, {
-        protocolDatum,
-        attestationValidatorAddress,
-        signerUtxo: selectedSigner,
-        signerTokenName: selectedSigner.tokenName,
-        description: datum.description,
-        sourceCode: datum.source_code,
-        scriptHash: datum.script_hash,
-        scriptAddress: datum.script_address,
-        stakingPolicy: datum.staking_policy,
-        mintingPolicy: datum.minting_policy,
-        counterAttestation: true,
-      });
+
+      // Reuse an existing counter-attestation UTxO if one is already live,
+      // the same way regular sign adds a token to an existing attestation UTxO.
+      const existingCounter = attestation.constituents.find((c) => c.isCounterAttestation);
+
+      let txHash: string;
+      if (existingCounter) {
+        const counterUtxo = {
+          txHash: existingCounter.txHash,
+          txIx: existingCounter.txIx,
+          datum: { ...datum, original_author: existingCounter.originalAuthor, counter_attestation: true },
+          signers: existingCounter.signers,
+          signerCount: existingCounter.signers.length,
+          counterSigners: [],
+          counterSignerCount: 0,
+          lovelace: existingCounter.lovelace,
+          referenceScriptHash: existingCounter.referenceScriptHash,
+          constituents: [existingCounter],
+        };
+        txHash = await signAttestation(wallet, {
+          protocolDatum,
+          attestationValidatorAddress,
+          attestationUtxo: counterUtxo,
+          signerUtxo: selectedSigner,
+          signerTokenName: selectedSigner.tokenName,
+        });
+      } else {
+        txHash = await createAttestation(wallet, {
+          protocolDatum,
+          attestationValidatorAddress,
+          signerUtxo: selectedSigner,
+          signerTokenName: selectedSigner.tokenName,
+          description: datum.description,
+          sourceCode: datum.source_code,
+          scriptHash: datum.script_hash,
+          scriptAddress: datum.script_address,
+          stakingPolicy: datum.staking_policy,
+          mintingPolicy: datum.minting_policy,
+          counterAttestation: true,
+        });
+      }
       onSuccess(txHash);
       onClose();
     } catch (e) {
-      onError((e as Error).message);
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+      onError(msg || "Unknown error");
     } finally {
       setLoading(false);
     }
@@ -132,10 +167,16 @@ export function SignCounterAttestationModal({
           )}
         </div>
 
+        {alreadyCountered && (
+          <div className="text-sm text-violet-400 bg-violet-400/10 rounded-lg px-3 py-2 border border-violet-500/20">
+            You have already counter-attested this attestation.
+          </div>
+        )}
+
         <SubmitButton
           loading={loading}
           onClick={handleSubmit}
-          disabled={!selectedSigner || signerUtxos.length === 0}
+          disabled={!selectedSigner || signerUtxos.length === 0 || alreadyCountered}
         >
           Submit Counter-Attestation
         </SubmitButton>

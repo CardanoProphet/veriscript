@@ -3,7 +3,7 @@
 use aiken/collection/dict
 use aiken/fuzz
 use aiken/interval.{Interval, IntervalBound, NegativeInfinity, PositiveInfinity}
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets
 use cardano/transaction.{
   InlineDatum, Input, NoDatum, Output, OutputReference, Transaction,
@@ -22,6 +22,11 @@ const mock_sm_validator: ByteArray =
 
 const mock_signer_policy: ByteArray =
   #"b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+
+// The signer's wallet payment-key hash — distinct from any script hash
+// because the signer input must come from a wallet, not a script UTxO.
+const mock_signer_wallet: ByteArray =
+  #"f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6"
 
 // 32 bytes = 64 hex chars
 const mock_tx_id: ByteArray =
@@ -142,7 +147,8 @@ fn sm_input() -> Input {
   }
 }
 
-// The signer's UTxO holding the signer token (inputs[1]).
+// The signer's UTxO holding the signer token (inputs[1]). Must come from
+// the signer's wallet (a VerificationKey address), not from any script UTxO.
 fn signer_input() -> Input {
   Input {
     output_reference: OutputReference {
@@ -151,7 +157,7 @@ fn signer_input() -> Input {
     },
     output: Output {
       address: Address {
-        payment_credential: Script(mock_signer_policy),
+        payment_credential: VerificationKey(mock_signer_wallet),
         stake_credential: None,
       },
       value: assets.from_lovelace(2_000_000)
@@ -204,6 +210,7 @@ test update_happy_path() {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -253,6 +260,7 @@ test update_fails_wrong_sm_validator_in_pp() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -289,6 +297,7 @@ test update_fails_no_pp_token() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -323,6 +332,7 @@ test update_fails_sm_input_missing_token() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -339,7 +349,7 @@ test update_fails_signer_input_missing_token() fail {
       },
       output: Output {
         address: Address {
-          payment_credential: Script(mock_signer_policy),
+          payment_credential: VerificationKey(mock_signer_wallet),
           stake_credential: None,
         },
         value: assets.from_lovelace(2_000_000),
@@ -359,6 +369,49 @@ test update_fails_signer_input_missing_token() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_out_ref(),
+    tx,
+  )
+}
+
+test update_fails_signer_input_at_script_address() fail {
+  // The signer input must be a wallet (VerificationKey) UTxO. Pointing
+  // signer_input_ix at a script-locked UTxO that happens to hold the
+  // signer token must be rejected — otherwise a third party could update
+  // someone's signer metadata without their consent, as long as the
+  // script holding the token can be co-spent.
+  let script_locked_signer =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: mock_tx_id,
+        output_index: 1,
+      },
+      output: Output {
+        address: Address {
+          payment_credential: Script(mock_sm_validator),
+          stake_credential: None,
+        },
+        value: assets.from_lovelace(2_000_000)
+          |> assets.add(mock_signer_policy, mock_token_name, 1),
+        datum: NoDatum,
+        reference_script: None,
+      },
+    }
+  let tx =
+    build_tx(
+      [sm_input(), script_locked_signer],
+      [pp_ref_input()],
+      [sm_output(), signer_change_output()],
+    )
+  signer_metadata_validator.signer_metadata_validator.spend(
+    Some(mock_old_metadatum()),
+    Update {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 1,
+      signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -391,6 +444,7 @@ test update_fails_wrong_output_address() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -422,6 +476,7 @@ test update_fails_sm_output_missing_token() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -460,6 +515,7 @@ test update_fails_nick_name_changed() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -483,6 +539,7 @@ test update_fails_wrong_out_ref() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     wrong_out_ref,
     tx,
@@ -503,6 +560,7 @@ test update_fails_no_datum() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -566,6 +624,7 @@ test prop_update_any_non_empty_nick_name(
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,
@@ -599,7 +658,7 @@ test prop_update_any_token_name(
       },
       output: Output {
         address: Address {
-          payment_credential: Script(mock_signer_policy),
+          payment_credential: VerificationKey(mock_signer_wallet),
           stake_credential: None,
         },
         value: assets.from_lovelace(2_000_000)
@@ -631,6 +690,7 @@ test prop_update_any_token_name(
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       signer_metadata_input_ix: 0,
+      signer_metadata_output_ix: 0,
     },
     mock_out_ref(),
     tx,

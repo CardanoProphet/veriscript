@@ -28,7 +28,22 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [filter, setFilter] = useState({ scriptHash: "", scriptAddress: "", mintingPolicy: "" });
 
-  const { connected, connecting, availableWallets, connect, disconnect, refreshAvailable } = useWallet();
+  const addToast = useCallback((type: Toast["type"], message: string, txHash?: string) => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts((prev) => [...prev, { id, type, message, txHash }]);
+  }, []);
+
+  const removeToast = useCallback((id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  const handleWalletError = useCallback(
+    (message: string) => addToast("error", message),
+    [addToast]
+  );
+
+  const { connected, connecting, availableWallets, connect, disconnect, refreshAvailable } =
+    useWallet({ onError: handleWalletError });
   const { config, loading: configLoading } = useConfig();
   const { attestations, total, loading: attLoading, reload: reloadAtt } = useAttestations(
     filter.scriptHash || filter.scriptAddress || filter.mintingPolicy ? filter : undefined
@@ -37,17 +52,8 @@ export default function App() {
 
   // ── Toasts ────────────────────────────────────────────────────────────────
 
-  const addToast = useCallback((type: Toast["type"], message: string) => {
-    const id = Math.random().toString(36).slice(2);
-    setToasts((prev) => [...prev, { id, type, message }]);
-  }, []);
-
-  const removeToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
-
   function onSuccess(txHash: string) {
-    addToast("success", `Transaction submitted! Hash: ${txHash.slice(0, 16)}…`);
+    addToast("success", "Transaction submitted!", txHash);
     setTimeout(() => reloadAtt(), 3000);
   }
 

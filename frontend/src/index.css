@@ -18,8 +18,18 @@ body {
   margin: 0;
   background-color: #030712;
   color: #f9fafb;
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+@layer base {
+  button:not(:disabled) {
+    cursor: pointer;
+  }
 }
 
 ::-webkit-scrollbar {

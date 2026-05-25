@@ -1,7 +1,7 @@
 use aiken/collection/dict
 use aiken/collection/list
 use aiken/primitive/bytearray
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets.{PolicyId, quantity_of, tokens}
 use cardano/transaction.{InlineDatum, Input, Output, Transaction}
 use config.{protocol_parameters_script_hash}
@@ -12,12 +12,17 @@ use types.{AttestationDatum, ProtocolParametersDatum}
 /// redeemer options:
 /// - **MintSignatureToken** is used for minting signature tokens
 ///   that attest the agreement on the attestation data by the signer.
+///   `is_new_attestation` distinguishes the create-attestation flow
+///   (where the attestation datum must be validated) from the
+///   sign-existing-attestation flow.
 /// - **Retire** is used by the creator of the attestation when
 ///   retiring the Utxo and burning all the signature tokens with it.
 pub type SignatureTokenPolicyRedeemer {
   MintSignatureToken {
     protocol_parameters_ix: Int,
-    signer_input_ix_option: Int,
+    signer_input_ix: Int,
+    attestation_output_ix: Int,
+    is_new_attestation: Bool,
   }
   Retire
 }
@@ -59,7 +64,12 @@ validator signature_token_policy {
     tx: Transaction,
   ) {
     when redeemer is {
-      MintSignatureToken { protocol_parameters_ix, signer_input_ix_option } -> {
+      MintSignatureToken {
+        protocol_parameters_ix,
+        signer_input_ix,
+        attestation_output_ix,
+        is_new_attestation,
+      } -> {
         let Transaction { inputs, reference_inputs, mint, outputs, .. } = tx
 
         expect Some(Input {
@@ -78,27 +88,21 @@ validator signature_token_policy {
           ..
         } = protocol_parameters_data
 
-        let signer_input_value =
-          when signer_input_ix_option is {
-            -1 -> {
-              expect [signer_input] = inputs
-              let Input { output: Output { address: addr, value: x, .. }, .. } =
-                signer_input
-              expect addr.payment_credential != Script(attestation_validator)
-              x
-            }
-            signer_input_ix -> {
-              expect Some(Input { output: Output { value: x, .. }, .. }) =
-                list.at(inputs, signer_input_ix)
-              x
-            }
-          }
+        expect Some(Input {
+          output: Output {
+            address: Address { payment_credential: VerificationKey(..), .. },
+            value: signer_input_value,
+            ..
+          },
+          ..
+        }) = list.at(inputs, signer_input_ix)
         expect [Pair(signer_token_name, 1)] =
           tokens(signer_input_value, signer_token_policy) |> dict.to_pairs
 
         let mint_tokens = tokens(mint, my_policy_id)
 
-        expect [attestation_output, _signer_output] = outputs
+        expect Some(attestation_output) =
+          list.at(outputs, attestation_output_ix)
         let Output {
           address: Address { payment_credential: attestation_address, .. },
           datum: attestation_datum,
@@ -136,11 +140,25 @@ validator signature_token_policy {
             signer_token_name,
           ) == 1
 
-        // 6. Attestation datum is correct.
+        // 6. Either:
+        //    - this is a new attestation (full datum validation), or
+        //    - an existing attestation is being spent (so attestation_validator.Sign
+        //      runs and enforces datum invariance against an already-validated input).
+        //    Without the second branch's check, a registered signer could mint a
+        //    signature token onto a fresh attestation_validator output carrying an
+        //    arbitrary datum (e.g. impersonating another `original_author`).
         let attestation_datum_correct =
-          when signer_input_ix_option is {
-            -1 -> is_attestation_datum_correct(signer_token_name, attestation)
-            _ -> True
+          if is_new_attestation {
+            is_attestation_datum_correct(signer_token_name, attestation)
+          } else {
+            list.any(
+              inputs,
+              fn(input) {
+                input.output.address.payment_credential == Script(
+                  attestation_validator,
+                )
+              },
+            )
           }
 
         protocol_token_correct? && signature_token_policy_correct? && mint_correct? && attestation_address_correct? && attestation_value_correct? && attestation_datum_correct?
@@ -160,4 +178,3 @@ validator signature_token_policy {
     fail @"unsupported purpose"
   }
 }
-

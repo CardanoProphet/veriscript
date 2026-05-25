@@ -232,7 +232,7 @@ export function AttestationsTable({
             value={scriptAddress}
             onChange={(e) => setScriptAddress(e.target.value)}
             placeholder="Filter by address…"
-            className="px-3 py-2 rounded-lg bg-gray-900 border border-white/10 text-gray-200 placeholder-gray-500 text-sm focus:outline-none focus:border-violet-500/60"
+            className="px-3 py-2 rounded-lg bg-gray-900 border border-white/10 text-gray-200 placeholder-gray-500 text-sm focus:outline-none focus:border-violet-500/60 font-mono"
           />
           <input
             value={mintingPolicy}

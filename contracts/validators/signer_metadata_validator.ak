@@ -1,6 +1,6 @@
 use aiken/collection/dict
 use aiken/collection/list
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets.{quantity_of, tokens}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
@@ -16,6 +16,7 @@ pub type SignerMetadataRedeemer {
     protocol_parameters_ix: Int,
     signer_input_ix: Int,
     signer_metadata_input_ix: Int,
+    signer_metadata_output_ix: Int,
   }
 }
 
@@ -35,6 +36,7 @@ validator signer_metadata_validator {
       protocol_parameters_ix,
       signer_input_ix,
       signer_metadata_input_ix,
+      signer_metadata_output_ix,
     } = redeemer
 
     let Transaction { inputs, reference_inputs, outputs, .. } = tx
@@ -68,10 +70,17 @@ validator signer_metadata_validator {
     expect [Pair(signer_token_name, 1)] =
       tokens(my_value, signer_token_policy) |> dict.to_pairs
 
-    expect Some(Input { output: Output { value: signer_input_value, .. }, .. }) =
-      list.at(inputs, signer_input_ix)
+    expect Some(Input {
+      output: Output {
+        address: Address { payment_credential: VerificationKey(..), .. },
+        value: signer_input_value,
+        ..
+      },
+      ..
+    }) = list.at(inputs, signer_input_ix)
 
-    expect [signer_metadata_output, _signer_ouput] = outputs
+    expect Some(signer_metadata_output) =
+      list.at(outputs, signer_metadata_output_ix)
     let Output {
       address: Address {
         payment_credential: signer_metadata_output_address,

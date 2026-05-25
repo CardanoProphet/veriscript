@@ -34,10 +34,10 @@ encoding = "hex"
 
 [config.preprod]
 network = "preprod"
-anchor_ix = 6
+anchor_ix = 4
 [config.preprod.anchor_tx_id]
-bytes = "2032d4c8b92f18ebd00dee97246dea52128bc8a72e390ff8ce51c1e0ec345b6a"
+bytes = "b5da9caa02b39727459334c9426c4562896edb30fa1e6a63c5eb646b149749ca"
 encoding = "hex"
 [config.preprod.protocol_parameters_script_hash]
-bytes = "ad256fd9053143b5f0370099ab59bc5dc356623faa4a7ac2c1956883"
+bytes = "d2a3345f4a3139b2fe9eb56e797f5c69de94d338f9f8ed3616510187"
 encoding = "hex"

@@ -1,18 +1,21 @@
 // Test module for signer_token_policy. No pub definitions → qualifies
 // as a test module, which allows importing validators directly.
+use aiken/cbor.{serialise}
 use aiken/collection/dict
 use aiken/crypto.{sha3_256}
 use aiken/fuzz
 use aiken/interval.{Interval, IntervalBound, NegativeInfinity, PositiveInfinity}
 use aiken/primitive/bytearray
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets.{Value}
 use cardano/transaction.{
   InlineDatum, Input, NoDatum, Output, OutputReference, Transaction,
 }
 use config.{protocol_parameters_script_hash}
 use consts.{protocol_parameters_token}
-use signer_token_policy.{is_signer_metadatum_correct}
+use signer_token_policy.{
+  SignerTokenPolicyRedeemer, is_signer_metadatum_correct,
+}
 use types.{ProtocolParametersDatum, SignerMetadataDatum}
 
 // ── is_signer_metadatum_correct: unit tests ──────────────
@@ -99,6 +102,11 @@ const mock_signer_policy: ByteArray =
 const mock_sm_validator: ByteArray =
   #"d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
 
+// The signer's wallet payment-key hash — the second minted signer
+// token must land at a VerificationKey address, not a script.
+const mock_signer_wallet: ByteArray =
+  #"f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6"
+
 // 32 bytes = 64 hex chars
 const mock_tx_id: ByteArray =
   #"0000000000000000000000000000000000000000000000000000000000000000"
@@ -112,7 +120,7 @@ const mock_signer_ix: Int = 0
 // ── Mock data builders ────────────────────────────────────
 
 fn mock_signer_token_name() -> ByteArray {
-  sha3_256(bytearray.push(mock_signer_tx_id, mock_signer_ix))
+  sha3_256(bytearray.concat(mock_signer_tx_id, serialise(mock_signer_ix)))
 }
 
 fn mock_signer_metadatum() -> SignerMetadataDatum {
@@ -227,11 +235,11 @@ fn signer_metadata_output() -> Output {
   }
 }
 
-// Second output: signer's own change, holding the other signer token.
+// Second output: signer's own wallet, holding the other signer token.
 fn signer_change_output() -> Output {
   Output {
     address: Address {
-      payment_credential: Script(mock_signer_policy),
+      payment_credential: VerificationKey(mock_signer_wallet),
       stake_credential: None,
     },
     value: assets.from_lovelace(2_000_000)
@@ -251,11 +259,22 @@ test mint_happy_path() {
       [signer_metadata_output(), signer_change_output()],
       assets.from_asset(mock_signer_policy, mock_signer_token_name(), 2),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }
 
-test mint_fails_multiple_inputs() fail {
-  // expect [signer_input] = inputs fails when there are two inputs.
+test mint_succeeds_with_multiple_inputs() {
+  // Wallets with fragmented UTxOs may need additional inputs to cover
+  // fees and minimum-Ada. The validator must accept that, as long as
+  // signer_input_ix points at the UTxO whose output_reference seeds
+  // the token name.
   let extra_input =
     Input {
       output_reference: OutputReference {
@@ -274,12 +293,20 @@ test mint_fails_multiple_inputs() fail {
     }
   let tx =
     build_tx(
-      [signer_input(), extra_input],
+      [extra_input, signer_input()],
       [pp_ref_input()],
       [signer_metadata_output(), signer_change_output()],
       assets.from_asset(mock_signer_policy, mock_signer_token_name(), 2),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 1,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }
 
 test mint_fails_wrong_signer_policy_in_pp() fail {
@@ -321,7 +348,15 @@ test mint_fails_wrong_signer_policy_in_pp() fail {
       [signer_metadata_output(), signer_change_output()],
       assets.from_asset(mock_signer_policy, mock_signer_token_name(), 2),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }
 
 test mint_fails_wrong_token_quantity() fail {
@@ -333,7 +368,15 @@ test mint_fails_wrong_token_quantity() fail {
       [signer_metadata_output(), signer_change_output()],
       assets.from_asset(mock_signer_policy, mock_signer_token_name(), 1),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }
 
 test mint_fails_wrong_metadata_address() fail {
@@ -356,7 +399,15 @@ test mint_fails_wrong_metadata_address() fail {
       [wrong_metadata_output, signer_change_output()],
       assets.from_asset(mock_signer_policy, mock_signer_token_name(), 2),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }
 
 test mint_fails_empty_nick_name() fail {
@@ -386,7 +437,50 @@ test mint_fails_empty_nick_name() fail {
       [bad_metadata_output, signer_change_output()],
       assets.from_asset(mock_signer_policy, mock_signer_token_name(), 2),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
+}
+
+test mint_fails_second_signer_token_at_script_address() fail {
+  // The second minted signer token must land at a wallet (VerificationKey)
+  // address. If it ends up at any script address (e.g. another instance of
+  // signer_metadata_validator, or any unrelated script) the spend validators
+  // — which require signer_input to come from a VerificationKey address —
+  // would be unable to use it, permanently bricking the signer's identity.
+  let script_locked_change =
+    Output {
+      address: Address {
+        payment_credential: Script(mock_sm_validator),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(2_000_000)
+        |> assets.add(mock_signer_policy, mock_signer_token_name(), 1),
+      datum: NoDatum,
+      reference_script: None,
+    }
+  let tx =
+    build_tx(
+      [signer_input()],
+      [pp_ref_input()],
+      [signer_metadata_output(), script_locked_change],
+      assets.from_asset(mock_signer_policy, mock_signer_token_name(), 2),
+    )
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }
 
 // ── Mint: property tests ──────────────────────────────────
@@ -420,18 +514,28 @@ test prop_mint_any_non_empty_nick_name(
       [fuzz_metadata_output, signer_change_output()],
       assets.from_asset(mock_signer_policy, mock_signer_token_name(), 2),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }
 
 test prop_mint_any_signer_input_ref(
   (fuzz_tx_id, fuzz_ix) via fuzz.both(
     fuzz.bytearray_fixed(32),
-    fuzz.int_between(0, 255),
+    fuzz.int_between(0, 65535),
   ),
 ) {
   // The token name is derived from the signer input's output_reference;
-  // the validator should accept any valid output_reference.
-  let fuzz_token_name = sha3_256(bytearray.push(fuzz_tx_id, fuzz_ix))
+  // the validator should accept any valid output_reference, including
+  // output indices >= 256 (regression test for the truncation bug
+  // when bytearray.push was used).
+  let fuzz_token_name = sha3_256(bytearray.concat(fuzz_tx_id, serialise(fuzz_ix)))
   let fuzz_signer_input =
     Input {
       output_reference: OutputReference {
@@ -462,7 +566,7 @@ test prop_mint_any_signer_input_ref(
   let fuzz_signer_change =
     Output {
       address: Address {
-        payment_credential: Script(mock_signer_policy),
+        payment_credential: VerificationKey(mock_signer_wallet),
         stake_credential: None,
       },
       value: assets.from_lovelace(2_000_000)
@@ -477,5 +581,13 @@ test prop_mint_any_signer_input_ref(
       [fuzz_metadata_output, fuzz_signer_change],
       assets.from_asset(mock_signer_policy, fuzz_token_name, 2),
     )
-  signer_token_policy.signer_token_policy.mint(0, mock_signer_policy, tx)
+  signer_token_policy.signer_token_policy.mint(
+    SignerTokenPolicyRedeemer {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 0,
+      signer_metadata_output_ix: 0,
+    },
+    mock_signer_policy,
+    tx,
+  )
 }

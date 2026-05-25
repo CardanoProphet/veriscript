@@ -56,7 +56,8 @@ export function SignAttestationModal({
       onSuccess(txHash);
       onClose();
     } catch (e) {
-      onError((e as Error).message);
+      const msg = e instanceof Error ? e.message : typeof e === "string" ? e : JSON.stringify(e);
+      onError(msg || "Unknown error");
     } finally {
       setLoading(false);
     }

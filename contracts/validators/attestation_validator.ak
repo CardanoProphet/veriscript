@@ -1,7 +1,7 @@
 use aiken/collection/dict
 use aiken/collection/dict/strategy
 use aiken/collection/list
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets.{AssetName, PolicyId, Value, quantity_of, tokens}
 use cardano/transaction.{
   InlineDatum, Input, Output, OutputReference, Transaction,
@@ -20,6 +20,7 @@ pub type AttestationValidatorRedeemer {
     protocol_parameters_ix: Int,
     signer_input_ix: Int,
     attestation_input_ix: Int,
+    attestation_output_ix: Int,
   }
   Retire {
     protocol_parameters_ix: Int,
@@ -60,7 +61,12 @@ validator attestation_validator {
     tx: Transaction,
   ) {
     when redeemer is {
-      Sign { protocol_parameters_ix, signer_input_ix, attestation_input_ix } -> {
+      Sign {
+        protocol_parameters_ix,
+        signer_input_ix,
+        attestation_input_ix,
+        attestation_output_ix,
+      } -> {
         let Transaction { inputs, reference_inputs, mint, outputs, .. } = tx
 
         expect Some(old_attestation) = datum
@@ -93,7 +99,11 @@ validator attestation_validator {
         } = protocol_parameters_data
 
         expect Some(Input {
-          output: Output { value: signer_input_value, .. },
+          output: Output {
+            address: Address { payment_credential: VerificationKey(..), .. },
+            value: signer_input_value,
+            ..
+          },
           ..
         }) = list.at(inputs, signer_input_ix)
         expect [Pair(signer_token_name, 1)] =
@@ -101,7 +111,8 @@ validator attestation_validator {
 
         let mint_tokens = tokens(mint, signature_token_policy)
 
-        expect [attestation_output, _signer_output] = outputs
+        expect Some(attestation_output) =
+          list.at(outputs, attestation_output_ix)
         let Output {
           address: Address { payment_credential: attestation_address, .. },
           datum: attestation_datum,
@@ -186,7 +197,11 @@ validator attestation_validator {
         } = protocol_parameters_data
 
         expect Some(Input {
-          output: Output { value: signer_input_value, .. },
+          output: Output {
+            address: Address { payment_credential: VerificationKey(..), .. },
+            value: signer_input_value,
+            ..
+          },
           ..
         }) = list.at(inputs, signer_input_ix)
         expect [Pair(signer_token_name, 1)] =

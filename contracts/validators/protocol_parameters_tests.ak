@@ -133,6 +133,27 @@ fn pp_input() -> Input {
   }
 }
 
+// A non-anchor UTxO at the protocol script address — e.g. a leftover
+// reference-script UTxO that RetireScript is intended to clean up.
+// Crucially, it does NOT carry the protocol_parameters_token.
+fn retire_target_input() -> Input {
+  Input {
+    output_reference: OutputReference {
+      transaction_id: mock_tx_id,
+      output_index: 1,
+    },
+    output: Output {
+      address: Address {
+        payment_credential: Script(mock_policy),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(2_000_000),
+      datum: NoDatum,
+      reference_script: Some(mock_policy),
+    },
+  }
+}
+
 fn pp_output() -> Output {
   Output {
     address: Address {
@@ -202,13 +223,51 @@ test mint_fails_wrong_anchor() fail {
 }
 
 test mint_fails_missing_protocol_parameters_token() fail {
-  // Only admin token in mint, no protocol_parameters_token: mint_correct fails.
+  // Only admin token in minted, no protocol_parameters_token: mint_correct fails.
   let tx =
     build_tx(
       [anchor_input()],
       [],
       [pp_output(), change_output()],
       assets.from_asset(mock_policy, admin_token, 1),
+    )
+  protocol_parameters.protocol_parameters.mint(Mint, mock_policy, tx)
+}
+
+test mint_fails_admin_token_in_protocol_utxo() fail {
+  // Putting the admin token into the PP UTxO (instead of the deployer's
+  // change) would let anyone hijack the protocol on the next Update by
+  // pointing deployer_ix at the PP UTxO itself — the PP UTxO would then
+  // both BE the input being updated AND satisfy admin_token_spent.
+  let pp_output_with_admin =
+    Output {
+      address: Address {
+        payment_credential: Script(mock_policy),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(2_000_000)
+        |> assets.add(mock_policy, protocol_parameters_token, 1)
+        |> assets.add(mock_policy, admin_token, 1),
+      datum: InlineDatum(mock_pp_datum()),
+      reference_script: Some(mock_policy),
+    }
+  let change_no_admin =
+    Output {
+      address: Address {
+        payment_credential: Script(mock_policy),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(2_000_000),
+      datum: NoDatum,
+      reference_script: None,
+    }
+  let tx =
+    build_tx(
+      [anchor_input()],
+      [],
+      [pp_output_with_admin, change_no_admin],
+      assets.from_asset(mock_policy, admin_token, 1)
+        |> assets.add(mock_policy, protocol_parameters_token, 1),
     )
   protocol_parameters.protocol_parameters.mint(Mint, mock_policy, tx)
 }
@@ -367,6 +426,40 @@ test update_fails_wrong_output_address() fail {
   )
 }
 
+test update_fails_admin_token_in_new_pp_utxo() fail {
+  // Even after a clean Mint, an Update that places the admin token into
+  // the new PP UTxO would set up the same self-referential hijack: any
+  // future Update could point deployer_ix at the PP UTxO and rewrite the
+  // protocol datum. Reject up-front on the output side.
+  let my_out_ref =
+    OutputReference { transaction_id: mock_tx_id, output_index: 1 }
+  let pp_output_with_admin =
+    Output {
+      address: Address {
+        payment_credential: Script(mock_policy),
+        stake_credential: None,
+      },
+      value: assets.from_lovelace(2_000_000)
+        |> assets.add(mock_policy, protocol_parameters_token, 1)
+        |> assets.add(mock_policy, admin_token, 1),
+      datum: InlineDatum(mock_pp_datum()),
+      reference_script: Some(mock_policy),
+    }
+  let tx =
+    build_tx(
+      [deployer_input(), pp_input()],
+      [],
+      [pp_output_with_admin, change_output()],
+      assets.from_lovelace(0),
+    )
+  protocol_parameters.protocol_parameters.spend(
+    None,
+    Update { deployer_ix: 0, protocol_parameters_ix: 1 },
+    my_out_ref,
+    tx,
+  )
+}
+
 test update_fails_pp_output_no_reference_script() fail {
   // Output has reference_script: None instead of Some(policy): script_correct fails.
   let my_out_ref =
@@ -461,7 +554,30 @@ test prop_update_any_pp_datum(
 // ── Spend: RetireScript redeemer unit tests ───────────────
 
 test retire_script_happy_path() {
-  // Admin spends a UTxO at the protocol script address.
+  // Admin spends a non-anchor UTxO at the protocol script address
+  // (e.g. an obsolete reference-script holder).
+  let my_out_ref =
+    OutputReference { transaction_id: mock_tx_id, output_index: 1 }
+  let tx =
+    build_tx(
+      [deployer_input(), retire_target_input()],
+      [],
+      [],
+      assets.from_lovelace(0),
+    )
+  protocol_parameters.protocol_parameters.spend(
+    None,
+    RetireScript { deployer_ix: 0, protocol_ix: 1 },
+    my_out_ref,
+    tx,
+  )
+}
+
+test retire_script_fails_on_protocol_parameters_utxo() fail {
+  // Regression for C1: RetireScript must NOT permit spending the
+  // protocol-parameters UTxO itself (which carries the singleton
+  // protocol_parameters_token). Previously a `== 1` check let admin
+  // exfiltrate the anchor token; the fix flipped it to `== 0`.
   let my_out_ref =
     OutputReference { transaction_id: mock_tx_id, output_index: 1 }
   let tx =
@@ -495,7 +611,12 @@ test retire_script_fails_no_admin_token() fail {
       },
     }
   let tx =
-    build_tx([no_admin_input, pp_input()], [], [], assets.from_lovelace(0))
+    build_tx(
+      [no_admin_input, retire_target_input()],
+      [],
+      [],
+      assets.from_lovelace(0),
+    )
   protocol_parameters.protocol_parameters.spend(
     None,
     RetireScript { deployer_ix: 0, protocol_ix: 1 },

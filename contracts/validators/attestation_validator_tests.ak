@@ -4,7 +4,7 @@ use aiken/collection/dict
 use aiken/fuzz
 use aiken/interval.{Interval, IntervalBound, NegativeInfinity, PositiveInfinity}
 use attestation_validator.{Retire, Sign, is_new_signature_added}
-use cardano/address.{Address, Script}
+use cardano/address.{Address, Script, VerificationKey}
 use cardano/assets.{Value}
 use cardano/transaction.{
   InlineDatum, Input, NoDatum, Output, OutputReference, Transaction,
@@ -130,6 +130,11 @@ const mock_sig_policy: ByteArray =
 
 const mock_sm_validator: ByteArray =
   #"d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4"
+
+// The signer's wallet payment-key hash — distinct from any script hash
+// because the signer input must come from a wallet, not a script UTxO.
+const mock_signer_wallet: ByteArray =
+  #"e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5"
 
 // 32 bytes = 64 hex chars
 const mock_tx_id: ByteArray =
@@ -264,7 +269,7 @@ fn signer_input() -> Input {
     },
     output: Output {
       address: Address {
-        payment_credential: Script(mock_signer_policy),
+        payment_credential: VerificationKey(mock_signer_wallet),
         stake_credential: None,
       },
       value: assets.from_lovelace(2_000_000)
@@ -318,6 +323,7 @@ test sign_happy_path() {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       attestation_input_ix: 0,
+      attestation_output_ix: 0,
     },
     my_out_ref,
     tx,
@@ -341,6 +347,7 @@ test sign_fails_wrong_out_ref() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       attestation_input_ix: 0,
+      attestation_output_ix: 0,
     },
     wrong_out_ref,
     tx,
@@ -364,6 +371,7 @@ test sign_fails_already_signed() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       attestation_input_ix: 0,
+      attestation_output_ix: 0,
     },
     my_out_ref,
     tx,
@@ -409,6 +417,7 @@ test sign_fails_datum_changed() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       attestation_input_ix: 0,
+      attestation_output_ix: 0,
     },
     my_out_ref,
     tx,
@@ -448,6 +457,52 @@ test sign_fails_no_pp_token() fail {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       attestation_input_ix: 0,
+      attestation_output_ix: 0,
+    },
+    my_out_ref,
+    tx,
+  )
+}
+
+test sign_fails_signer_input_at_script_address() fail {
+  // The signer input must be a wallet (VerificationKey) UTxO. Pointing
+  // signer_input_ix at a script-locked UTxO that happens to hold a signer
+  // token must be rejected — otherwise a third party could attach a forged
+  // signature to an attestation without the signer's consent, as long as
+  // the script holding the token can be co-spent.
+  let my_out_ref =
+    OutputReference { transaction_id: mock_tx_id, output_index: 0 }
+  let script_locked_signer =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: mock_tx_id,
+        output_index: 1,
+      },
+      output: Output {
+        address: Address {
+          payment_credential: Script(mock_sm_validator),
+          stake_credential: None,
+        },
+        value: assets.from_lovelace(2_000_000)
+          |> assets.add(mock_signer_policy, mock_signer_name, 1),
+        datum: NoDatum,
+        reference_script: None,
+      },
+    }
+  let tx =
+    build_tx(
+      [attest_input_unsigned(), script_locked_signer],
+      [pp_ref_input()],
+      [attest_output_signed(), signer_change_output()],
+      assets.from_asset(mock_sig_policy, mock_signer_name, 1),
+    )
+  attestation_validator.attestation_validator.spend(
+    Some(mock_attest_datum()),
+    Sign {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 1,
+      attestation_input_ix: 0,
+      attestation_output_ix: 0,
     },
     my_out_ref,
     tx,
@@ -468,7 +523,7 @@ test prop_sign_any_signer_name(signer_name via fuzz.bytearray_between(1, 32)) {
       },
       output: Output {
         address: Address {
-          payment_credential: Script(mock_signer_policy),
+          payment_credential: VerificationKey(mock_signer_wallet),
           stake_credential: None,
         },
         value: assets.from_lovelace(2_000_000)
@@ -501,6 +556,7 @@ test prop_sign_any_signer_name(signer_name via fuzz.bytearray_between(1, 32)) {
       protocol_parameters_ix: 0,
       signer_input_ix: 1,
       attestation_input_ix: 0,
+      attestation_output_ix: 0,
     },
     my_out_ref,
     tx,
@@ -544,7 +600,7 @@ test retire_fails_wrong_original_author() fail {
       },
       output: Output {
         address: Address {
-          payment_credential: Script(mock_signer_policy),
+          payment_credential: VerificationKey(mock_signer_wallet),
           stake_credential: None,
         },
         value: assets.from_lovelace(2_000_000)
@@ -559,6 +615,51 @@ test retire_fails_wrong_original_author() fail {
       [pp_ref_input()],
       [],
       assets.from_asset(mock_sig_policy, #"beef", -1),
+    )
+  attestation_validator.attestation_validator.spend(
+    Some(mock_attest_datum()),
+    Retire {
+      protocol_parameters_ix: 0,
+      signer_input_ix: 1,
+      attestation_input_ix: 0,
+    },
+    my_out_ref,
+    tx,
+  )
+}
+
+test retire_fails_signer_input_at_script_address() fail {
+  // The signer input must be a wallet (VerificationKey) UTxO. Pointing
+  // signer_input_ix at a script-locked UTxO that happens to hold the
+  // original_author's signer token must be rejected — otherwise a third
+  // party could trigger Retire (burning the signature tokens and unlocking
+  // the attestation's lovelace) without the original author's consent,
+  // as long as the script holding the token can be co-spent.
+  let my_out_ref =
+    OutputReference { transaction_id: mock_tx_id, output_index: 0 }
+  let script_locked_signer =
+    Input {
+      output_reference: OutputReference {
+        transaction_id: mock_tx_id,
+        output_index: 1,
+      },
+      output: Output {
+        address: Address {
+          payment_credential: Script(mock_sm_validator),
+          stake_credential: None,
+        },
+        value: assets.from_lovelace(2_000_000)
+          |> assets.add(mock_signer_policy, mock_signer_name, 1),
+        datum: NoDatum,
+        reference_script: None,
+      },
+    }
+  let tx =
+    build_tx(
+      [attest_input_signed(), script_locked_signer],
+      [pp_ref_input()],
+      [],
+      assets.from_asset(mock_sig_policy, mock_signer_name, -1),
     )
   attestation_validator.attestation_validator.spend(
     Some(mock_attest_datum()),
